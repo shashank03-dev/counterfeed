@@ -2,7 +2,9 @@
 
 **See each other breathe, then try breathing as one.**
 
-Together is a desktop video call for two people, each on their own Mac. You talk, then spend five quiet minutes breathing: two minutes apart (you only see your own breathing), then three minutes together (both waves overlaid, with a live "in step" meter). At the end you see how in step you were, measured and compared against chance.
+Together is a desktop video call for two people, each on their own Mac. You talk, then spend a few quiet minutes breathing: first apart (you only see your own breathing), then together (both waves overlaid, with a live "in step" meter that marks what chance alone would give). At the end you see how in step you were, measured and compared against chance.
+
+**Session length** (Home, next to the session plan): **Full** is 2 min apart + 3 min together; **Short** is 1 min apart + 1.5 min together. The person who starts the room picks; the other Mac follows the host's timings.
 
 Each laptop measures **only its own person** with the Presage SmartSpectra SDK, on that laptop. Only a few derived numbers per second (breathing wave height, pulse, talking yes/no) cross the network, alongside the normal encrypted call media.
 
@@ -41,7 +43,7 @@ Some networks (offices, some hotspots, symmetric NAT) block direct peer-to-peer 
 2. After a minute of measured breathing, **Keep as partner** saves that minute as a recording (signal numbers only, never video).
 3. **Home › Practice** runs a full session against that replay. It loops for the whole session and is always shown as a **"Replayed session"**, never as a live person.
 
-Credits: SmartSpectra's free tier is 100 credits at 30 s each (about 50 minutes of measurement). A full session is about 6–8 minutes per laptop; a camera check is about 1 minute.
+Credits: SmartSpectra's free tier is 100 credits at 30 s each (about 50 minutes of measurement). A Full session is about 6–8 minutes of measurement per laptop (12–16 credits), a Short one about 4–5 minutes (8–10 credits); a camera check is about 1 minute. Each laptop bills its own key, so give the second Mac its own free key for rehearsals.
 
 ### Two peers on one Mac (development)
 
@@ -118,6 +120,7 @@ apps/desktop/src
 3. **Phase.** Analytic signal via FFT Hilbert transform; the FFT buffer is filled by even reflection, and 3 s at each segment edge is trimmed.
 4. **Sync.** Phase-locking value, `|mean e^{i(φA−φB)}|`, over 30 s windows with a 5 s step. A window counts only with ≥ 60 % clean signal from both.
 5. **Chance.** The partner's series is circularly shifted by random offsets ≥ 10 s, 200 times. Windows that straddle the shift's splice point are skipped (otherwise the splice biases chance low and inflates significance; there's a regression test for this). "x× more in step than chance" is claimed only above the 95th percentile with ≥ 100 valid surrogates; otherwise the app says it looks like chance, or that the data was too short to tell.
+6. **Live chance mark.** During Together the meter also shows chance: the same surrogate test over the last 90 s (60 shifts, fixed seed, every 5 s). On Results each bar is grey up to its chance level and coloured only past it, so a high number that is just chance never looks like success.
 
 ### Moments (listener reactions)
 
@@ -168,7 +171,7 @@ npm run check             # eslint + tsc (5 projects) + vitest
 npm run e2e               # builds the app, then drives two real instances end to end
 ```
 
-**Unit and integration (vitest, 111 tests).** Assertions are on measured numbers:
+**Unit and integration (vitest, 114 tests).** Assertions are on measured numbers:
 - **Filter.** |H| ≥ 0.97 at 15 br/min; ≤ 0.005 at 0.02 Hz drift; ≤ 0.01 at 2 Hz. Reconstruction error < 5 % with zero lag.
 - **Hilbert.** Error < 0.15 rad from 3 s in, < 0.06 rad from 10 s in.
 - **PLV.**
@@ -189,10 +192,11 @@ npm run e2e               # builds the app, then drives two real instances end t
 - **Embedded server.** It starts and creates a real room, shares an existing Together server without closing it, reports a port held by another app, leaves remote URLs alone, and follows URL changes (the old port is released).
 - **Replay loop.** 7 s of playback from a 2 s recording wraps 3 times with strictly rising timestamps and no gap larger than one sample.
 
-**End to end (67 checks).** The built app runs as two isolated instances over the real signaling server and a real WebRTC connection. Covered:
+**End to end (71 checks).** The built app runs as two isolated instances over the real signaling server and a real WebRTC connection. Covered:
 - Consent gate and room codes.
 - Lobby, call video and audio both ways, partner pulse over the data channel, mute.
 - Moods, Apart and Together switching together, results agreeing on both sides, and media stopping at the end.
+- Session length: the host picks Short while the guest keeps Full; both run and store the host's lengths. The live meter shows its chance mark, and the result bars state chance.
 - History, export and Delete All.
 - Peer-2 replay over the network, and Practice with its banner.
 - A partner ending the session, and a partner's process being killed (timer pauses, the session ends at 20 s with partial results).

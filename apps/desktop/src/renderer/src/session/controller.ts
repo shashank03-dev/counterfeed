@@ -17,11 +17,11 @@ import { CameraSource } from '../sensing/CameraSource';
 import { ReplaySource } from '../sensing/ReplaySource';
 import { TestSource } from '../sensing/TestSource';
 import type { SignalSource } from '../sensing/types';
-import { analyzePhase, liveSync, prepare, type PersonSignals, type SyncResult } from '../sync/analyze';
+import { analyzePhase, liveChance, liveSync, prepare, type PersonSignals, type SyncResult } from '../sync/analyze';
 import { estimateRate } from '../sync/rate';
 import { bandpassGappy } from '../sync/filter';
 import { makeGrid, resample } from '../sync/resample';
-import { elapsed, isPhase, ORDER, reduce, remaining, type Event, type Intent, type State } from './machine';
+import { elapsed, isPhase, ORDER, phaseDuration, reduce, remaining, type Event, type Intent, type State } from './machine';
 import { blankSession, useSession, type Problem } from './store';
 
 export const CAP = 30 * 60 * 32; // 30 min of 30 Hz samples per series (~1.8 MB each, preallocated)
@@ -90,6 +90,7 @@ export class Session {
   private timers: ReturnType<typeof setInterval>[] = [];
   private unsubs: (() => void)[] = [];
   private lastSyncAt = 0;
+  private lastChanceAt = 0;
   private youRate: { value: number; conf: number } | null = null;
   private youPulse: { value: number; stable: boolean } | null = null;
   private startedAt = Date.now();
@@ -356,7 +357,7 @@ export class Session {
       case 'phase': {
         if (this.isHost) return; // only the host decides phases
         const at = (m.startAt - this.offsetUs) / 1000;
-        this.dispatch({ type: 'SCHEDULE', name: m.name, at, elapsedMs: m.elapsedMs });
+        this.dispatch({ type: 'SCHEDULE', name: m.name, at, elapsedMs: m.elapsedMs, durationMs: m.durationMs });
         if (this.source instanceof ReplaySource) this.source.seek(m.name, at * 1000);
         return;
       }
@@ -381,8 +382,11 @@ export class Session {
   private schedule(name: PhaseName, delayMs: number, elapsedMs = 0) {
     if (!this.isHost) return;
     const atUs = nowUs() + delayMs * 1000;
-    this.dispatch({ type: 'SCHEDULE', name, at: atUs / 1000, elapsedMs });
-    this.peer?.send({ type: 'phase', name, startAt: Math.round(atUs), ...(elapsedMs ? { elapsedMs } : {}) });
+    const c = this.st.ctx;
+    // The host's length decides; the guest gets the exact duration with the phase change.
+    const durationMs = c.durations[name] ?? phaseDuration(name, c.phaseScale, c.length) ?? undefined;
+    this.dispatch({ type: 'SCHEDULE', name, at: atUs / 1000, elapsedMs, durationMs });
+    this.peer?.send({ type: 'phase', name, startAt: Math.round(atUs), ...(elapsedMs ? { elapsedMs } : {}), ...(durationMs ? { durationMs } : {}) });
     if (this.source instanceof ReplaySource) this.source.seek(name, atUs);
   }
 
@@ -461,11 +465,21 @@ export class Session {
     const s = this.st;
     const t = nowUs();
     let sync = s.live.sync;
+    let chance = s.live.chance;
     if (s.ctx.state === 'together' && performance.now() - this.lastSyncAt > 1000) {
       this.lastSyncAt = performance.now();
       const v = liveSync(this.you.signals(t - 65e6, t), this.partner.signals(t - 65e6 + this.offsetUs, t + this.offsetUs), t, this.offsetUs);
       sync = Number.isFinite(v) ? v : null;
-    } else if (s.ctx.state !== 'together') sync = null;
+      // Chance moves slowly (it depends on each person's own rhythm), so every 5 s is plenty.
+      if (performance.now() - this.lastChanceAt > 5000) {
+        this.lastChanceAt = performance.now();
+        const ch = liveChance(this.you.signals(t - 95e6, t), this.partner.signals(t - 95e6 + this.offsetUs, t + this.offsetUs), t, this.offsetUs);
+        chance = Number.isFinite(ch) ? ch : chance;
+      }
+    } else if (s.ctx.state !== 'together') {
+      sync = null;
+      chance = null;
+    }
     const pPulse = this.partner.pulse.length ? this.partner.pulse.vAt(this.partner.pulse.length - 1) : null;
     const pStable = this.partner.pulse.length ? this.partner.pulse.fAt(this.partner.pulse.length - 1) === 1 : false;
     const stats = this.source?.stats();
@@ -473,6 +487,7 @@ export class Session {
       live: {
         ...s.live,
         sync,
+        chance,
         clock: this.clock?.estimate ?? null,
         you: {
           ...s.live.you,
@@ -638,6 +653,7 @@ export class Session {
       role: c.role ?? 'host',
       replay: s.partner.replay,
       partial: c.state === 'ended' ? c.partial : false,
+      lengths: { ...(c.durations.apart ? { apart: c.durations.apart } : {}), ...(c.durations.together ? { together: c.durations.together } : {}) },
       apart,
       together,
       breathingRate: { you: this.rate(this.you, 0), partner: this.rate(this.partner, this.offsetUs) },

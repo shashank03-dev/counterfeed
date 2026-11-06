@@ -10,11 +10,13 @@ interface Prefs {
   theme: Theme;
   shareReactions: boolean;
   recordSignals: boolean;
+  /** Full (2 + 3 min of breathing) or Short (1 + 1.5 min). Used when you start a room or practise. */
+  sessionLength: 'full' | 'short';
 }
 
 const PREFS_KEY = 'together.prefs.v1';
 function loadPrefs(): Prefs {
-  const d: Prefs = { theme: 'system', shareReactions: false, recordSignals: false };
+  const d: Prefs = { theme: 'system', shareReactions: false, recordSignals: false, sessionLength: 'full' };
   try {
     return { ...d, ...(JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<Prefs>) };
   } catch {

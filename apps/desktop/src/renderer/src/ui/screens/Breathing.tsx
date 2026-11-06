@@ -1,6 +1,7 @@
 import { remaining } from '../../session/machine';
 import { useSession } from '../../session/store';
 import { Icon } from '../icons';
+import { minutes } from '../format';
 import { cx, useNow } from '../kit';
 import { CountdownRing, Heart, SyncMeter, Waves } from '../viz';
 
@@ -32,7 +33,7 @@ export function Breathing({ phase }: { phase: 'apart' | 'together' }) {
         <div className="flex items-center gap-3">
           <div className="text-right">
             <div className="text-[11px] font-medium tracking-[0.07em] text-fg-dim uppercase">{paused ? 'Paused' : 'Left'}</div>
-            <div className="text-[12px] text-fg-muted">{together ? '3 min' : '2 min'} · silent</div>
+            <div className="text-[12px] text-fg-muted">{minutes(total)} · silent</div>
           </div>
           <CountdownRing remainingMs={left} totalMs={total} size={60} who={together ? 'duo' : 'you'} />
         </div>
@@ -74,8 +75,14 @@ export function Breathing({ phase }: { phase: 'apart' | 'together' }) {
         <aside className="flex min-h-0 flex-col gap-3">
           {together && (
             <div className="grid place-items-center rounded-[22px] bg-surface/70 px-3 pt-5 pb-3 shadow-panel backdrop-blur">
-              <SyncMeter value={s.live.sync} testId="sync-meter" />
-              <p className="mt-1 text-center text-[11.5px] leading-relaxed text-fg-dim">{s.live.sync === null ? 'Needs about 30 seconds of quiet breathing from you both.' : 'How steadily your breaths keep the same rhythm, last 30 s.'}</p>
+              <SyncMeter value={s.live.sync} chance={s.live.chance} testId="sync-meter" />
+              <p className="mt-1 text-center text-[11.5px] leading-relaxed text-fg-dim">
+                {s.live.sync === null
+                  ? 'Needs about 30 seconds of quiet breathing from you both.'
+                  : s.live.chance === null
+                    ? 'How steadily your breaths keep the same rhythm, last 30 s.'
+                    : 'The mark is chance: how in step your two paces look by accident. Past it, you’re syncing.'}
+              </p>
             </div>
           )}
           <div className="grid gap-3 rounded-[22px] bg-surface/70 p-4 shadow-panel backdrop-blur">
@@ -84,7 +91,7 @@ export function Breathing({ phase }: { phase: 'apart' | 'together' }) {
             <Person who="them" name="Them" bpm={s.live.partner.pulse} stable={s.live.partner.pulseStable} talking={themTalking} present={s.partner.connected} hiddenWave={!together} />
           </div>
           {!together && (
-            <p className="px-2 text-[12px] leading-relaxed text-fg-dim">These two minutes also let the measurement settle before you see each other’s breath.</p>
+            <p className="px-2 text-[12px] leading-relaxed text-fg-dim">This part also lets the measurement settle before you see each other’s breath.</p>
           )}
         </aside>
       </div>

@@ -238,12 +238,18 @@ export function Waves({ show, seconds = 20, className, testId, feed }: { show: (
 /* ------------------------------------------------------------------ sync meter */
 
 /** How in step the two of you are right now (PLV over the last 30 s), as an arc. */
-export function SyncMeter({ value, size = 168, testId }: { value: number | null; size?: number; testId?: string }) {
+export function SyncMeter({ value, chance = null, size = 168, testId }: { value: number | null; chance?: number | null; size?: number; testId?: string }) {
   const r = size / 2 - 10;
   const c = 2 * Math.PI * r;
   const arc = c * (240 / 360);
   const v = value === null ? 0 : Math.max(0, Math.min(1, value));
   const id = useId();
+  // The chance mark sits on the arc (svg frame: the arc starts at 0° and runs 240° clockwise).
+  const ch = chance === null ? null : Math.max(0, Math.min(1, chance));
+  const a = ch === null ? 0 : (ch * 240 * Math.PI) / 180;
+  const at = (rad: number) => ({ x: size / 2 + rad * Math.cos(a), y: size / 2 + rad * Math.sin(a) });
+  const t0 = at(r - 9);
+  const t1 = at(r + 9);
   return (
     <div data-testid={testId} className="relative grid place-items-center" style={{ width: size, height: size * 0.86 }} role="meter" aria-label="In step" aria-valuemin={0} aria-valuemax={100} aria-valuenow={value === null ? undefined : Math.round(v * 100)}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="absolute top-0" style={{ transform: 'rotate(150deg)' }}>
@@ -263,10 +269,21 @@ export function SyncMeter({ value, size = 168, testId }: { value: number | null;
           strokeDasharray={`${arc * v} ${c}`}
           style={{ transition: 'stroke-dasharray 900ms var(--ease)' }}
         />
+        {ch !== null && (
+          <g data-testid={testId ? `${testId}-chance` : undefined} style={{ transition: 'opacity 400ms' }}>
+            <line x1={t0.x} y1={t0.y} x2={t1.x} y2={t1.y} stroke="var(--surface)" strokeWidth={6} strokeLinecap="round" />
+            <line x1={t0.x} y1={t0.y} x2={t1.x} y2={t1.y} stroke="var(--fg)" strokeWidth={2.5} strokeLinecap="round" />
+          </g>
+        )}
       </svg>
       <div className="relative mt-3 text-center">
         <div className="tnum font-display text-[40px] leading-none font-semibold tracking-[-0.04em] text-fg">{value === null ? '–' : Math.round(v * 100)}</div>
         <div className="mt-1.5 text-[11px] font-medium tracking-[0.08em] text-fg-dim uppercase">{value === null ? 'Listening' : 'In step'}</div>
+        {ch !== null && value !== null && (
+          <div className="tnum mt-1 text-[11px] text-fg-muted" data-testid={testId ? `${testId}-chance-value` : undefined}>
+            chance {Math.round(ch * 100)}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -340,11 +357,22 @@ export function CompareBars({ rows }: { rows: { label: string; value: number | n
         <div key={r.label} data-testid={r.testId}>
           <div className="mb-1.5 flex items-baseline justify-between">
             <span className="text-[12.5px] font-medium text-fg">{r.label}</span>
-            <span className="tnum text-[12.5px] text-fg-muted">{r.value === null ? 'not enough signal' : `${Math.round(r.value * 100)} in step`}</span>
+            <span className="tnum text-[12.5px] text-fg-muted">
+              {r.value === null ? 'not enough signal' : `${Math.round(r.value * 100)} in step`}
+              {r.value !== null && r.chance !== null && <span className="text-fg-dim"> · chance {Math.round(r.chance * 100)}</span>}
+            </span>
           </div>
+          {/* Grey up to chance (what two people breathing at these paces get by accident), colour only past it. */}
           <div className="relative h-2.5 overflow-hidden rounded-full bg-fg/[0.07]">
             {r.value !== null && <div className="absolute inset-y-0 left-0 rounded-full bg-g-duo transition-[width] duration-700 ease-soft" style={{ width: `${Math.max(2, r.value * 100)}%` }} />}
-            {r.chance !== null && <div className="absolute inset-y-[-2px] w-[2px] rounded-full bg-bg ring-1 ring-fg-muted" style={{ left: `calc(${r.chance * 100}% - 1px)` }} title="Chance level" />}
+            {r.value !== null && r.chance !== null && (
+              <div
+                className="absolute inset-y-0 left-0 rounded-l-full bg-[color-mix(in_oklch,var(--fg)_16%,var(--surface))] transition-[width] duration-700 ease-soft"
+                style={{ width: `${Math.min(r.value, r.chance) * 100}%`, borderRadius: r.value <= r.chance ? '9999px' : undefined }}
+                data-chance-fill
+              />
+            )}
+            {r.chance !== null && <div className="absolute inset-y-0 w-[2px] bg-fg-muted" style={{ left: `calc(${r.chance * 100}% - 1px)` }} title="Chance level" />}
           </div>
           {r.hint && <div className="mt-1 text-[11.5px] text-fg-dim">{r.hint}</div>}
         </div>

@@ -47,3 +47,10 @@ export function verdict(r: PhaseResult | null): { headline: string; short: strin
     strong: false,
   };
 }
+
+/** "2 min", "1.5 min", "45 s": a phase length for copy. */
+export function minutes(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)} s`;
+  const m = Math.round((ms / 60_000) * 2) / 2;
+  return `${m % 1 ? m.toFixed(1) : m} min`;
+}

@@ -12,11 +12,15 @@ import type { PhaseName } from '@together/shared';
 
 export type State = 'idle' | 'consent' | 'connecting' | 'lobby' | 'call' | 'moodStart' | 'apart' | 'together' | 'moodEnd' | 'results' | 'ended';
 export type Role = 'host' | 'guest' | 'practice';
-export type Intent = { kind: 'create' } | { kind: 'join'; code: string } | { kind: 'practice'; recordingId: string };
+export type SessionLength = 'full' | 'short';
+export type Intent = { kind: 'create'; length?: SessionLength } | { kind: 'join'; code: string } | { kind: 'practice'; recordingId: string; length?: SessionLength };
 export type EndReason = 'you-ended' | 'partner-ended' | 'partner-lost' | 'error' | 'finished';
 
 export const ORDER: PhaseName[] = ['lobby', 'call', 'moodStart', 'apart', 'together', 'moodEnd', 'results'];
 export const TIMED: Partial<Record<PhaseName, number>> = { apart: 120_000, together: 180_000 };
+/** Short sessions save measurement credits and suit a demo: 1 min apart, 1.5 min together. */
+export const SHORT: Partial<Record<PhaseName, number>> = { apart: 60_000, together: 90_000 };
+export const LENGTHS: Record<SessionLength, Partial<Record<PhaseName, number>>> = { full: TIMED, short: SHORT };
 export const RECONNECT_MS = 20_000;
 
 export interface Timer {
@@ -33,7 +37,7 @@ export interface Ctx {
   intent: Intent | null;
   role: Role | null;
   /** Upcoming phase switch (countdown), local-clock ms. */
-  scheduled: { name: PhaseName; at: number; elapsedMs: number } | null;
+  scheduled: { name: PhaseName; at: number; elapsedMs: number; durationMs?: number } | null;
   timer: Timer | null;
   partnerPresent: boolean;
   /** Local ms by which the partner must be back, else the session ends. */
@@ -44,6 +48,10 @@ export interface Ctx {
   /** Phases that actually ran, for partial results. */
   reached: PhaseName[];
   phaseScale: number;
+  /** Full or Short. The host's choice; a guest follows the durations the host sends. */
+  length: SessionLength;
+  /** Durations the timed phases actually ran with (ms, unscaled by pauses). */
+  durations: Partial<Record<PhaseName, number>>;
 }
 
 export type Event =
@@ -52,7 +60,7 @@ export type Event =
   | { type: 'CONNECTED'; role: Role }
   | { type: 'PEER_JOINED' }
   /** A phase broadcast (or the host's own decision), already converted to the local clock. */
-  | { type: 'SCHEDULE'; name: PhaseName; at: number; elapsedMs?: number }
+  | { type: 'SCHEDULE'; name: PhaseName; at: number; elapsedMs?: number; durationMs?: number }
   | { type: 'TICK'; now: number }
   | { type: 'PEER_LOST'; now: number }
   | { type: 'PEER_BACK'; now: number }
@@ -60,14 +68,14 @@ export type Event =
   | { type: 'RESET' };
 
 export function initial(): Ctx {
-  return { state: 'idle', intent: null, role: null, scheduled: null, timer: null, partnerPresent: false, reconnectBy: null, endReason: null, partial: false, reached: [], phaseScale: 1 };
+  return { state: 'idle', intent: null, role: null, scheduled: null, timer: null, partnerPresent: false, reconnectBy: null, endReason: null, partial: false, reached: [], phaseScale: 1, length: 'full', durations: {} };
 }
 
 export const isPhase = (s: State): s is PhaseName => (ORDER as string[]).includes(s);
 const rank = (s: State) => (isPhase(s) ? ORDER.indexOf(s) : -1);
 
-export function phaseDuration(name: PhaseName, scale = 1): number | null {
-  const d = TIMED[name];
+export function phaseDuration(name: PhaseName, scale = 1, length: SessionLength = 'full'): number | null {
+  const d = LENGTHS[length][name];
   return d === undefined ? null : Math.round(d * scale);
 }
 
@@ -82,10 +90,11 @@ export function elapsed(c: Ctx, now: number): number {
   return c.timer.elapsedBefore + (c.timer.pausedAt ?? now) - c.timer.startedAt;
 }
 
-function enter(c: Ctx, name: PhaseName, now: number, elapsedMs: number): Ctx {
-  const d = phaseDuration(name, c.phaseScale);
+function enter(c: Ctx, name: PhaseName, now: number, elapsedMs: number, durationMs?: number): Ctx {
+  const d = TIMED[name] === undefined ? null : (durationMs ?? phaseDuration(name, c.phaseScale, c.length));
   return {
     ...c,
+    durations: d === null ? c.durations : { ...c.durations, [name]: d },
     state: name,
     scheduled: null,
     timer: d === null ? null : { startedAt: now, elapsedBefore: elapsedMs, durationMs: d, pausedAt: c.partnerPresent ? null : now },
@@ -102,7 +111,7 @@ export function reduce(c: Ctx, e: Event): Ctx {
   switch (e.type) {
     case 'BEGIN':
       if (c.state !== 'idle' && c.state !== 'ended') return c;
-      return { ...initial(), state: 'consent', intent: e.intent, phaseScale: e.phaseScale ?? 1 };
+      return { ...initial(), state: 'consent', intent: e.intent, phaseScale: e.phaseScale ?? 1, length: (e.intent.kind !== 'join' && e.intent.length) || 'full' };
 
     case 'CONSENT':
       if (c.state !== 'consent') return c;
@@ -122,14 +131,14 @@ export function reduce(c: Ctx, e: Event): Ctx {
       const cur = rank(c.state);
       // Forward only, or the same timed phase again (a resume after a reconnect).
       if (target < cur || (target === cur && !TIMED[e.name])) return c;
-      return { ...c, scheduled: { name: e.name, at: e.at, elapsedMs: e.elapsedMs ?? 0 } };
+      return { ...c, scheduled: { name: e.name, at: e.at, elapsedMs: e.elapsedMs ?? 0, durationMs: e.durationMs } };
     }
 
     case 'TICK': {
       let n = c;
       if (n.reconnectBy !== null && e.now >= n.reconnectBy) return finish(n, 'partner-lost');
       if (n.scheduled && e.now >= n.scheduled.at && (n.partnerPresent || n.role === 'practice')) {
-        n = enter(n, n.scheduled.name, n.scheduled.at, n.scheduled.elapsedMs);
+        n = enter(n, n.scheduled.name, n.scheduled.at, n.scheduled.elapsedMs, n.scheduled.durationMs);
         if (n.state === 'results') n = { ...n, endReason: 'finished' };
       }
       return n;

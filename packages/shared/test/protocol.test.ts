@@ -12,6 +12,7 @@ describe('data channel protocol', () => {
       { type: 'pong', id: 1, t0: 1, t1: 2, t2: 3 },
       { type: 'sig', frames: [{ t: 1, trace: -0.4, traceStable: true }, { t: 2, pulse: 71, pulseConf: 60 }, { t: 3, talking: true }] },
       { type: 'phase', name: 'together', startAt: 5, elapsedMs: 1000 },
+      { type: 'phase', name: 'apart', startAt: 5, durationMs: 60_000 },
       { type: 'ready', phase: 'lobby', ready: true },
       { type: 'mood', when: 'start', label: 'Calm' },
       { type: 'moment', moment: { id: 'm-1', t: 1, atMs: 272000, kind: 'smile', peak: 84, pulseDelta: 9 } },
@@ -38,6 +39,8 @@ describe('data channel protocol', () => {
       { type: 'sig', frames: [{ t: 1, video: 'base64...' }] }, // unknown fields are rejected: only derived numbers cross the wire
       { type: 'sig', frames: Array.from({ length: 241 }, (_, i) => ({ t: i })) },
       { type: 'phase', name: 'party', startAt: 1 },
+      { type: 'phase', name: 'apart', startAt: 1, durationMs: 0 },
+      { type: 'phase', name: 'apart', startAt: 1, durationMs: 4_000_000 },
       { type: 'mood', when: 'start', label: 'Ecstatic' },
       { type: 'moment', moment: { id: 'x', t: 1, atMs: 1, kind: 'anger', peak: 50, pulseDelta: null } },
       { type: 'hello', appVersion: '1', sharing: {} },

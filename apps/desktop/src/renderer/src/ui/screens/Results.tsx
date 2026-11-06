@@ -1,11 +1,11 @@
 import { useId, useMemo } from 'react';
 import type { PhaseResult, SessionRecord } from '@together/shared';
 import { describeMoment } from '../../moments/detect';
-import type { EndReason } from '../../session/machine';
+import { TIMED, type EndReason } from '../../session/machine';
 import { Icon } from '../icons';
 import { Callout, cx } from '../kit';
 import { CompareBars, DuoGradient } from '../viz';
-import { formatDate, verdict } from '../format';
+import { formatDate, minutes, verdict } from '../format';
 
 /** The outcome of one session. Used live at the end of a session and in History. */
 export function Results({ record, live, endedEarly, reason }: { record: SessionRecord; live?: boolean; endedEarly?: boolean; reason?: EndReason | null }) {
@@ -51,11 +51,11 @@ export function Results({ record, live, endedEarly, reason }: { record: SessionR
       <div className="mt-5 grid grid-cols-[1.1fr_1fr] gap-4">
         <section className="rise rounded-[18px] bg-surface p-5 shadow-panel" style={{ ['--i' as string]: 1 }}>
           <h2 className="text-[13px] font-semibold">Apart, then together</h2>
-          <p className="mt-0.5 mb-5 text-[12px] text-fg-dim">How steadily your breathing kept the same rhythm. The mark on each bar is chance for that part.</p>
+          <p className="mt-0.5 mb-5 text-[12px] text-fg-dim">How steadily your breathing kept the same rhythm. Grey is what two people breathing at your paces get by chance; colour is how far past it you went.</p>
           <CompareBars
             rows={[
-              { label: 'Apart · 2 min, waves hidden', value: pct(record.apart?.plv), chance: record.apart ? record.apart.chance.mean : null, hint: record.apart ? coverageHint(record.apart) : undefined, testId: 'bar-apart' },
-              { label: 'Together · 3 min, waves shown', value: pct(record.together?.plv), chance: record.together ? record.together.chance.mean : null, hint: record.together ? coverageHint(record.together) : undefined, testId: 'bar-together' },
+              { label: `Apart · ${minutes(record.lengths?.apart ?? TIMED.apart!)}, waves hidden`, value: pct(record.apart?.plv), chance: record.apart ? record.apart.chance.mean : null, hint: record.apart ? coverageHint(record.apart) : undefined, testId: 'bar-apart' },
+              { label: `Together · ${minutes(record.lengths?.together ?? TIMED.together!)}, waves shown`, value: pct(record.together?.plv), chance: record.together ? record.together.chance.mean : null, hint: record.together ? coverageHint(record.together) : undefined, testId: 'bar-together' },
             ]}
           />
           {record.apart && record.together && (

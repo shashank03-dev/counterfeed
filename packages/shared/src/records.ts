@@ -37,6 +37,8 @@ export const SessionRecordSchema = z
     replay: z.object({ recordedAt: z.number().nonnegative() }).strict().nullable(),
     /** Ended early (someone left or the connection dropped for good). */
     partial: z.boolean(),
+    /** How long the timed phases were set to run (ms). Absent in records from before Short sessions (Full: 2 + 3 min). */
+    lengths: z.object({ apart: z.number().int().positive(), together: z.number().int().positive() }).partial().strict().optional(),
     apart: PhaseResultSchema.nullable(),
     together: PhaseResultSchema.nullable(),
     breathingRate: z.object({ you: num, partner: num }).strict(),

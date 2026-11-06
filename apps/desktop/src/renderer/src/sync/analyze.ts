@@ -111,3 +111,14 @@ export function liveSync(you: PersonSignals, partner: PersonSignals, nowLocal: n
   const r = plv(p.phiA.subarray(from), p.phiB.subarray(from), { fs: p.fs, windowS: 30, stepS: 30, minCoverage: 0.5 }, p.validA.subarray(from), p.validB.subarray(from));
   return r.plv;
 }
+
+/**
+ * Live chance level for the meter: the circular-shift surrogate mean over the last 90 s, with the same 30 s
+ * window as the meter. It answers "how in step would two people breathing at these paces look by accident",
+ * so the live number can be read against it. NaN until there is enough clean signal.
+ */
+export function liveChance(you: PersonSignals, partner: PersonSignals, nowLocal: number, offsetUs: number, n = 60): number {
+  const p = prepare(you, partner, { start: nowLocal - 90e6, end: nowLocal, offsetUs });
+  const s = surrogateTest(p.phiA, p.phiB, { fs: p.fs, windowS: 30, stepS: 5, minCoverage: 0.5, n, minShiftS: 10, seed: 0x5eed }, p.validA, p.validB);
+  return s.n >= 10 ? s.mean : NaN;
+}

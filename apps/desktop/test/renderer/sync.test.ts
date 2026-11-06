@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzePhase, liveSync, type PersonSignals } from '../../src/renderer/src/sync/analyze';
+import { analyzePhase, liveChance, liveSync, type PersonSignals } from '../../src/renderer/src/sync/analyze';
 import { fft } from '../../src/renderer/src/sync/fft';
 import { BAND, bandpass, bandpassGappy, magnitudeResponse } from '../../src/renderer/src/sync/filter';
 import { analyticPhase } from '../../src/renderer/src/sync/phase';
@@ -296,5 +296,22 @@ describe('analyzePhase end to end', () => {
     expect(locked).toBeGreaterThan(0.9);
     expect(apart).toBeLessThan(0.6);
     expect(Number.isNaN(liveSync(person(a, start), person(a, start), start + 500e6, 0))).toBe(true);
+  });
+
+  it('live chance: a locked pair sits well above its chance mark; independent breathers have a low mark', () => {
+    const a = breathing(100, 11, 0.25);
+    const now = start + 100e6;
+    const lockedSync = liveSync(person(a, start), person(a, start), now, 0);
+    const lockedChance = liveChance(person(a, start), person(a, start), now, 0);
+    expect(lockedChance).toBeGreaterThan(0);
+    expect(lockedSync - lockedChance).toBeGreaterThan(0.3);
+    // Independent breathers at different paces: chance is low (a single 30 s reading swings around it).
+    const b = breathing(100, 99, 0.3);
+    const indepChance = liveChance(person(a, start), person(b, start), now, 0);
+    expect(indepChance).toBeGreaterThan(0.05);
+    expect(indepChance).toBeLessThan(0.45);
+    // Deterministic (fixed seed), so the mark doesn't jitter between updates with the same data.
+    expect(liveChance(person(a, start), person(b, start), now, 0)).toBe(indepChance);
+    expect(Number.isNaN(liveChance(person(a, start), person(a, start), start + 500e6, 0))).toBe(true);
   });
 });

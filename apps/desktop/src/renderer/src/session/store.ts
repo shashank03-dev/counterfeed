@@ -41,6 +41,8 @@ export interface Live {
   partner: PersonLive;
   /** Live PLV over the last 30 s (Together only). */
   sync: number | null;
+  /** How in step these two rhythms look by accident (circular-shift chance level, last 90 s). Together only. */
+  chance: number | null;
   clock: ClockEstimate | null;
   call: CallStats | null;
   link: LinkState;
@@ -113,6 +115,7 @@ export const blankSession = (): SessionState => ({
     you: { ...person(), quality: null, status: 'off', breathingReady: false },
     partner: person(),
     sync: null,
+    chance: null,
     clock: null,
     call: null,
     link: 'new',

@@ -70,6 +70,8 @@ export const MsgSchema = z.discriminatedUnion('type', [
       startAt: micros,
       /** Time already spent in this phase before a pause (resume after a reconnect). */
       elapsedMs: z.number().int().nonnegative().max(3_600_000).optional(),
+      /** Length of a timed phase, chosen by the host (Full or Short session). Guests follow it. */
+      durationMs: z.number().int().min(1_000).max(3_600_000).optional(),
     })
     .strict(),
   z.object({ type: z.literal('ready'), phase: PhaseNameSchema, ready: z.boolean() }).strict(),

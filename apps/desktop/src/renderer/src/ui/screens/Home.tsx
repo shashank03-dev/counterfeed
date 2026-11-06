@@ -3,12 +3,15 @@ import { normalizeRoomCode } from '@together/shared';
 import { useApp } from '../../app/store';
 import { Session } from '../../session/controller';
 import { Icon } from '../icons';
-import { Button, Callout, cx, TextInput } from '../kit';
+import { LENGTHS } from '../../session/machine';
+import { Button, Callout, cx, Segmented, TextInput } from '../kit';
 import { Sparkline } from '../viz';
-import { formatDay, verdict } from '../format';
+import { formatDay, minutes, verdict } from '../format';
 
 export function Home() {
-  const { config, sessions, recordings, go } = useApp();
+  const { config, sessions, recordings, go, prefs, setPrefs } = useApp();
+  const length = prefs.sessionLength;
+  const plan = LENGTHS[length];
   const [code, setCode] = useState('');
   const [bad, setBad] = useState(false);
   const last = sessions?.[0];
@@ -35,7 +38,7 @@ export function Home() {
           Breathe <span className="text-duo">in step</span> with someone, wherever they are.
         </h1>
         <p className="mt-3 max-w-[600px] text-[14px] leading-relaxed text-pretty text-fg-muted">
-          Talk on a video call, then spend five quiet minutes breathing, first apart, then together. Each laptop measures its own person; you see both breaths and how closely they move.
+          Talk on a video call, then spend a few quiet minutes breathing, first apart, then together. Each laptop measures its own person; you see both breaths and how closely they move.
         </p>
       </header>
 
@@ -54,7 +57,7 @@ export function Home() {
           </span>
           <h2 className="text-[16px] font-semibold tracking-[-0.015em]">Start a room</h2>
           <p className="mt-1 mb-5 text-[13px] leading-relaxed text-fg-muted">You’ll get a short code like <span className="font-mono text-fg">TIDE-42</span> to send to the other person.</p>
-          <Button variant="you" size="lg" className="mt-auto self-start" onClick={() => start({ kind: 'create' })} trailing={<Icon.ArrowRight />} data-testid="start-room">
+          <Button variant="you" size="lg" className="mt-auto self-start" onClick={() => start({ kind: 'create', length })} trailing={<Icon.ArrowRight />} data-testid="start-room">
             Start a room
           </Button>
         </section>
@@ -89,14 +92,29 @@ export function Home() {
         </section>
       </div>
 
-      <ol className="rise mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-fg-dim" style={{ ['--i' as string]: 4 }} aria-label="How a session goes">
-        {['Talk on video', 'Breathe apart · 2 min', 'Breathe together · 3 min', 'See how in step you were'].map((t, i) => (
-          <li key={t} className="flex items-center gap-2">
-            {i > 0 && <Icon.ChevronRight size={12} className="opacity-60" />}
-            <span>{t}</span>
-          </li>
-        ))}
-      </ol>
+      <div className="rise mt-5 flex flex-wrap items-center justify-between gap-3" style={{ ['--i' as string]: 4 }}>
+        <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-fg-dim" aria-label="How a session goes" data-testid="session-plan">
+          {['Talk on video', `Breathe apart · ${minutes(plan.apart!)}`, `Breathe together · ${minutes(plan.together!)}`, 'See how in step you were'].map((t, i) => (
+            <li key={i} className="flex items-center gap-2">
+              {i > 0 && <Icon.ChevronRight size={12} className="opacity-60" />}
+              <span>{t}</span>
+            </li>
+          ))}
+        </ol>
+        <div className="flex items-center gap-2.5" title="The person who starts the room picks the length; the other person follows it.">
+          <span className="text-[12px] text-fg-dim">Length</span>
+          <Segmented
+            label="Session length"
+            size="sm"
+            value={length}
+            onChange={(v) => setPrefs({ sessionLength: v })}
+            options={[
+              { value: 'full', label: 'Full' },
+              { value: 'short', label: 'Short' },
+            ]}
+          />
+        </div>
+      </div>
 
       {(last || rec) && (
         <div className="mt-4 grid grid-cols-2 gap-4">
@@ -118,7 +136,7 @@ export function Home() {
                 <div className="text-[11px] font-medium tracking-[0.06em] text-fg-dim uppercase">Practice</div>
                 <div className="mt-1 text-[13px] text-fg-muted">Breathe with a replay of a session recorded {formatDay(rec.recordedAt)}. Clearly labelled, numbers only.</div>
               </div>
-              <Button size="md" icon={<Icon.Play />} onClick={() => start({ kind: 'practice', recordingId: rec.id })} data-testid="practice">
+              <Button size="md" icon={<Icon.Play />} onClick={() => start({ kind: 'practice', recordingId: rec.id, length })} data-testid="practice">
                 Practice
               </Button>
             </div>

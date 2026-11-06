@@ -124,11 +124,16 @@ console.log('\n1. Idle app footprint');
 
 // ---------------------------------------------------------------- 2. full two-person session
 console.log('\n2. Full session: host + guest over real signaling and WebRTC');
-A = await launch({ name: 'host', signalUrl: url, phaseScale: 0.4, env: { TOGETHER_TEST_SEED: '11' } });
-B = await launch({ name: 'guest', signalUrl: url, phaseScale: 0.4, env: { TOGETHER_TEST_SEED: '22' } });
+// The host runs a Short session (1 + 1.5 min) at 0.8x: 48 s apart, 72 s together. The guest keeps the Full
+// default, so finishing in step with the host proves it follows the host's durations.
+A = await launch({ name: 'host', signalUrl: url, phaseScale: 0.8, env: { TOGETHER_TEST_SEED: '11' } });
+B = await launch({ name: 'guest', signalUrl: url, phaseScale: 0.8, env: { TOGETHER_TEST_SEED: '22' } });
 {
   const { page: a } = A;
   const { page: b } = B;
+  await a.getByRole('radio', { name: 'Short' }).click();
+  const plan = await a.textContent('[data-testid="session-plan"]');
+  check('choosing Short updates the session plan on Home', /apart · 1 min/.test(plan) && /together · 1\.5 min/.test(plan), plan);
   await a.click('[data-testid="start-room"]');
   check('consent shown before anything starts', await vis(a, '[data-testid="consent-accept"]'));
   check('accept is disabled until every line is ticked', await a.isDisabled('[data-testid="consent-accept"]'));
@@ -223,6 +228,8 @@ B = await launch({ name: 'guest', signalUrl: url, phaseScale: 0.4, env: { TOGETH
   await a.waitForTimeout(25000);
   const meter = await a.getAttribute('[data-testid="sync-meter"]', 'aria-valuenow');
   check('live sync meter shows a value after 30 s of Together', meter !== null, meter);
+  const chanceMark = await vis(a, '[data-testid="sync-meter-chance"]', 6000);
+  check('live meter shows the chance mark and value', chanceMark && (await vis(a, '[data-testid="sync-meter-chance-value"]', 1000)), await a.textContent('[data-testid="sync-meter"]'));
   await shot(a, '08-together');
   await shot(b, '08b-together-guest');
 
@@ -238,6 +245,8 @@ B = await launch({ name: 'guest', signalUrl: url, phaseScale: 0.4, env: { TOGETH
   check('results state a verdict', verdictA.length > 10, verdictA);
   check('host and guest reach the same verdict', verdictA === verdictB || /chance/.test(verdictA) === /chance/.test(verdictB), `${verdictA} | ${verdictB}`);
   check('Apart and Together bars are present', (await vis(a, '[data-testid="bar-apart"]')) && (await vis(a, '[data-testid="bar-together"]')));
+  const barT = await a.textContent('[data-testid="bar-together"]');
+  check('result bars state the chance level and the Short length', /chance \d+/.test(barT) && /Together · 1 min/.test(barT), barT);
   const camAfter = await a.evaluate(() => [...document.querySelectorAll('video')].filter((v) => v.srcObject).length);
   check('camera and call media stopped at the end', camAfter === 0, camAfter);
   await shot(a, '09-results');
@@ -252,6 +261,7 @@ B = await launch({ name: 'guest', signalUrl: url, phaseScale: 0.4, env: { TOGETH
   check('stored record has the guest’s shared mood but no media', stored.moods.partner.start === null && stored.moods.you.start === 'Tense' && !/video|frame|pixel/i.test(JSON.stringify(stored)), stored.moods);
   const storedB = JSON.parse(readFileSync(join(B.dir, 'sessions', (await import('node:fs')).readdirSync(join(B.dir, 'sessions'))[0]), 'utf8'));
   check('guest received the host’s shared mood word', storedB.moods.partner.start === 'Tense', storedB.moods.partner);
+  check('host and guest both ran the host’s Short lengths (guest default is Full)', stored.lengths?.apart === 48000 && stored.lengths?.together === 72000 && JSON.stringify(storedB.lengths) === JSON.stringify(stored.lengths), { host: stored.lengths, guest: storedB.lengths });
   const recs = (await import('node:fs')).readdirSync(join(A.dir, 'recordings'));
   check('host recording saved (signals only)', recs.length === 1, recs);
   await a.waitForTimeout(500);
@@ -360,8 +370,8 @@ B = await launch({ name: 'guest', signalUrl: url, phaseScale: 0.4, env: { TOGETH
   await a.waitForTimeout(3000);
   check('camera check draws the breathing wave', (await inked(a)) > 300, `${await inked(a)} px`);
   const tSave = Date.now();
-  await a.waitForSelector('[data-testid="practice-save"]:not([disabled])', { timeout: 60000 });
-  check('"Keep as partner" unlocks after the minimum measured time', Date.now() - tSave < 40000, `${Math.round((Date.now() - tSave) / 1000)} s`);
+  await a.waitForSelector('[data-testid="practice-save"]:not([disabled])', { timeout: 75000 });
+  check('"Keep as partner" unlocks after the minimum measured time (60 s x 0.8)', Date.now() - tSave < 60000, `${Math.round((Date.now() - tSave) / 1000)} s`);
   await a.click('[data-testid="practice-save"]');
   check('camera check is saved as a practice partner', await vis(a, '[data-testid="practice-card"] >> text=Saved', 8000));
   await shot(a, '16-camera-check');
