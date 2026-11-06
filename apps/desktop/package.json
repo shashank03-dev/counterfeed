@@ -1,0 +1,77 @@
+{
+  "name": "@together/desktop",
+  "version": "1.0.0",
+  "productName": "Together",
+  "private": true,
+  "description": "Together: see each other breathe, and breathe in step.",
+  "author": "Together",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:peer2": "TOGETHER_PEER=2 electron-vite dev -- --together-peer2",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder --mac --arm64 --publish never",
+    "e2e": "electron-vite build && node e2e/run.mjs"
+  },
+  "dependencies": {
+    "@smartspectra/node-sdk": "3.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.4",
+    "@together/shared": "*",
+    "@together/signal": "*",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "electron": "45.2.3",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "playwright-core": "^1.65.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.4",
+    "vite": "^8.3.6",
+    "ws": "^8.22.1",
+    "zustand": "^5.0.16"
+  },
+  "build": {
+    "appId": "app.together.desktop",
+    "productName": "Together",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "!node_modules/@smartspectra/node-sdk-*/**"
+    ],
+    "asar": true,
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.healthcare-fitness",
+      "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Together measures your breathing and pulse from the camera on this Mac, and shows your video to the person you're calling.",
+        "NSMicrophoneUsageDescription": "Together sends your voice to the person you're calling. Nothing is recorded."
+      },
+      "extraResources": [
+        {
+          "from": "../../node_modules/@smartspectra/node-sdk-darwin-${arch}/",
+          "to": "smartspectra"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "together",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Breathe in step with someone, wherever they are.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @together/desktop",
+    "dev:peer2": "npm run dev:peer2 -w @together/desktop",
+    "signal": "npm run start -w @together/signal",
+    "build": "npm run build -w @together/desktop",
+    "dist": "npm run dist -w @together/desktop",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "npm run e2e -w @together/desktop",
+    "typecheck": "tsc -p packages/shared --noEmit && tsc -p apps/signal --noEmit && tsc -p apps/desktop/tsconfig.node.json --noEmit && tsc -p apps/desktop/tsconfig.web.json --noEmit && tsc -p apps/desktop/tsconfig.test.json --noEmit",
+    "lint": "eslint .",
+    "check": "npm run lint && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.10.0",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
+  }
+}

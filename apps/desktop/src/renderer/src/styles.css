@@ -1,0 +1,373 @@
+@import 'tailwindcss';
+
+/*
+ * Together design tokens.
+ * Two people, two hues: coral is you, sage is them. Each person's gradient stays inside their own hue
+ * (peach -> coral, mint -> teal), so it reads as light on one colour rather than a second colour. Anything the
+ * two of you share (the sync score, the timeline, "in step") uses the dusk gradient, coral -> rose -> lilac ->
+ * teal, interpolated in OKLCH so it never passes through the grey-brown an sRGB coral->sage blend produces.
+ * Neutrals are warm graphite (dark) or paper (light). Components use the semantic names only.
+ */
+:root {
+  color-scheme: dark;
+  --bg: #0c0b0a;
+  --panel: #131211;
+  --surface: #181716;
+  --surface-2: #1e1d1b;
+  --surface-3: #292724;
+  --overlay: #1c1b19;
+  --line: rgb(255 248 240 / 0.07);
+  --line-strong: rgb(255 248 240 / 0.125);
+  --fg: #efece7;
+  --fg-muted: #a6a29a;
+  --fg-dim: #6f6b64;
+  --inverse: #0c0b0a;
+
+  --you: #ee8a63;
+  --you-deep: #e07750;
+  --them: #72bfb0;
+  --them-deep: #5aab9b;
+  --you-hi: #ffb48a;
+  --you-lo: #e2603c;
+  --them-hi: #9be3cf;
+  --them-lo: #2f9c8a;
+  --duo-1: #f08a68;
+  --duo-2: #e98aa6;
+  --duo-3: #9fa6e0;
+  --duo-4: #6cc3b4;
+  /* Fills that carry white text or icons: every stop keeps >= 3.3:1 contrast with white. */
+  --you-fill-1: #e06a40;
+  --you-fill-2: #c44a24;
+  --them-fill-1: #3a9c8a;
+  --them-fill-2: #22786a;
+  --ok: #7db894;
+  --warn: #d6a556;
+  --bad: #e0705e;
+
+  --shadow-panel: 0 0 0 1px var(--line), 0 1px 0 0 rgb(255 255 255 / 0.035) inset, 0 10px 30px -14px rgb(0 0 0 / 0.65);
+  --shadow-pop: 0 0 0 1px var(--line-strong), 0 24px 64px -20px rgb(0 0 0 / 0.75);
+  --stage: var(--bg);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f2f0ec;
+  --panel: #fbfaf8;
+  --surface: #ffffff;
+  --surface-2: #f6f4f0;
+  --surface-3: #ebe8e3;
+  --overlay: #ffffff;
+  --line: rgb(40 30 20 / 0.085);
+  --line-strong: rgb(40 30 20 / 0.15);
+  --fg: #1c1a17;
+  --fg-muted: #615d56;
+  --fg-dim: #908b83;
+  --inverse: #ffffff;
+  --you: #d4673f;
+  --you-deep: #c0582f;
+  --them: #3a8f80;
+  --them-deep: #2f7d6f;
+  --you-hi: #f59a70;
+  --you-lo: #c9522c;
+  --them-hi: #5fc4ac;
+  --them-lo: #23806e;
+  --duo-1: #e0714c;
+  --duo-2: #d8698f;
+  --duo-3: #7f88d4;
+  --duo-4: #33a08f;
+  --ok: #3d8a5f;
+  --warn: #a67718;
+  --bad: #c2483b;
+  --shadow-panel: 0 0 0 1px var(--line), 0 1px 2px 0 rgb(40 30 20 / 0.05), 0 10px 28px -18px rgb(40 30 20 / 0.18);
+  --shadow-pop: 0 0 0 1px var(--line), 0 24px 60px -24px rgb(40 30 20 / 0.32);
+  --stage: var(--bg);
+}
+
+/* Gradients (see the header). Per person: within one hue. Shared: the dusk gradient. */
+@utility bg-g-you {
+  background-image: linear-gradient(135deg in oklch, var(--you-fill-1), var(--you-fill-2));
+}
+@utility bg-g-them {
+  background-image: linear-gradient(135deg in oklch, var(--them-fill-1), var(--them-fill-2));
+}
+@utility bg-g-you-button {
+  background-image: linear-gradient(180deg in oklch, var(--you-fill-1), var(--you-fill-2));
+}
+@utility bg-g-duo {
+  background-image: linear-gradient(90deg in oklch, var(--duo-1), var(--duo-2) 35%, var(--duo-3) 65%, var(--duo-4));
+}
+@utility text-duo {
+  background-image: linear-gradient(90deg in oklch, var(--duo-1), var(--duo-2) 35%, var(--duo-3) 65%, var(--duo-4));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-overlay: var(--overlay);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-dim: var(--fg-dim);
+  --color-inverse: var(--inverse);
+  --color-you: var(--you);
+  --color-you-deep: var(--you-deep);
+  --color-them: var(--them);
+  --color-them-deep: var(--them-deep);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+  --shadow-panel: var(--shadow-panel);
+  --shadow-pop: var(--shadow-pop);
+  --ease-soft: var(--ease);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+    user-select: none;
+    cursor: default;
+  }
+  input,
+  textarea,
+  .selectable {
+    user-select: text;
+  }
+  button {
+    cursor: default;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--fg) 18%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--fg) 55%, transparent);
+    outline-offset: 2px;
+  }
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag,
+button,
+input,
+a,
+select,
+textarea,
+[role='dialog'] {
+  -webkit-app-region: no-drag;
+}
+
+.scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+
+
+/* ---------------------------------------------------------------- motion (CSS only: compositor work) */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: rise 420ms var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+.fade {
+  animation: fade 300ms var(--ease) both;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+.pop {
+  animation: pop 260ms var(--ease) both;
+}
+
+/* The brand mark: two lights that add up where they overlap. The mark is isolated, so they blend only with
+   each other (never with the page), and the overlap reads as a bright lens on dark and paper alike. */
+.brand-dot {
+  mix-blend-mode: screen;
+}
+
+/* The brand mark breathes: 4 s in, 6 s out (a calm resting rhythm). */
+@keyframes breathe {
+  0%,
+  100% {
+    transform: translateX(var(--dx)) scale(0.92);
+  }
+  40% {
+    transform: translateX(calc(var(--dx) * 0.55)) scale(1.04);
+  }
+}
+.breathe > span {
+  animation: breathe 10s var(--ease) infinite;
+}
+
+/* Heartbeat: duration set from BPM. */
+@keyframes beat {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  14% {
+    transform: scale(1.16);
+  }
+  28% {
+    transform: scale(0.98);
+  }
+  42% {
+    transform: scale(1.07);
+  }
+  70% {
+    transform: scale(1);
+  }
+}
+.beat {
+  animation: beat var(--beat, 1s) ease-in-out infinite;
+  transform-origin: 50% 60%;
+}
+
+/* Orbiting arc on a busy primary button (after Vercelify's OrbitButton). */
+@property --orbit {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+.orbit-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  background: conic-gradient(from var(--orbit), transparent 0deg 270deg, currentColor 360deg);
+  opacity: 0.6;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: orbit 1.6s linear infinite;
+}
+@keyframes orbit {
+  to {
+    --orbit: 360deg;
+  }
+}
+
+/* Indeterminate wait: a soft light sweeping a track. */
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: none;
+  }
+  20%,
+  60% {
+    transform: translateX(-5px);
+  }
+  40%,
+  80% {
+    transform: translateX(5px);
+  }
+}
+.shake {
+  animation: shake 320ms ease-in-out;
+}
+
+/* Countdown numerals between phases. */
+@keyframes count {
+  0% {
+    opacity: 0;
+    transform: scale(1.35);
+    filter: blur(6px);
+  }
+  25% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+.count {
+  animation: count 1s var(--ease) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
