@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { IPC, type TogetherApi } from '../shared/ipc';
+import { CLOSE_REQUEST, IPC, type CounterfeedApi } from '../shared/ipc';
 
 // SmartSpectra's preload bridge (exposes window.__smartspectraBridge for the renderer SDK).
 // "If the app already has a preload script, require this module from it" (docs/nodejs.md, Preload).
@@ -10,6 +10,13 @@ const call =
   (...args: unknown[]) =>
     ipcRenderer.invoke(channel, ...args);
 
-const api = Object.fromEntries(Object.entries(IPC).map(([name, channel]) => [name, call(channel)])) as unknown as TogetherApi;
+const api = {
+  ...Object.fromEntries(Object.entries(IPC).map(([name, channel]) => [name, call(channel)])),
+  onCloseRequest(fn: () => void) {
+    const h = () => fn();
+    ipcRenderer.on(CLOSE_REQUEST, h);
+    return () => ipcRenderer.removeListener(CLOSE_REQUEST, h);
+  },
+} as unknown as CounterfeedApi;
 
-contextBridge.exposeInMainWorld('together', api);
+contextBridge.exposeInMainWorld('counterfeed', api);

@@ -1,10 +1,10 @@
-import type { TogetherApi } from '../../../shared/ipc';
+import type { CounterfeedApi } from '../../../shared/ipc';
 
 declare global {
   interface Window {
-    together: TogetherApi;
+    counterfeed: CounterfeedApi;
   }
 }
 
-/** The narrow main-process API exposed by the preload (window.together). */
-export const api: TogetherApi = window.together;
+/** The narrow main-process API exposed by the preload (window.counterfeed). */
+export const api: CounterfeedApi = window.counterfeed;

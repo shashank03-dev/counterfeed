@@ -1,22 +1,26 @@
 import { create } from 'zustand';
-import type { SessionRecord } from '@together/shared';
-import type { AppConfig, RecordingInfo } from '../../../shared/ipc';
+import type { Report, Thumbs } from '@counterfeed/shared';
+import type { AppConfig } from '../../../shared/ipc';
 import { api } from '../lib/api';
 
-export type Route = 'home' | 'history' | 'diagnostics' | 'settings';
+export type Route = 'home' | 'history' | 'camera' | 'settings' | 'report';
 export type Theme = 'system' | 'dark' | 'light';
 
 interface Prefs {
   theme: Theme;
-  shareReactions: boolean;
-  recordSignals: boolean;
-  /** Full (2 + 3 min of breathing) or Short (1 + 1.5 min). Used when you start a room or practise. */
-  sessionLength: 'full' | 'short';
+  /** Last feed length chosen (ms; 0 = until I stop). */
+  feedLength: number;
+  nudges: boolean;
+  /** Focus sessions: last length (ms; 0 = until I stop), Do Not Disturb, app tracking and the nudge. */
+  focusLength: number;
+  focusDnd: boolean;
+  focusApps: boolean;
+  focusNudges: boolean;
 }
 
-const PREFS_KEY = 'together.prefs.v1';
+const PREFS_KEY = 'counterfeed.prefs.v1';
 function loadPrefs(): Prefs {
-  const d: Prefs = { theme: 'system', shareReactions: false, recordSignals: false, sessionLength: 'full' };
+  const d: Prefs = { theme: 'system', feedLength: 5 * 60_000, nudges: false, focusLength: 25 * 60_000, focusDnd: true, focusApps: true, focusNudges: false };
   try {
     return { ...d, ...(JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<Prefs>) };
   } catch {
@@ -24,24 +28,36 @@ function loadPrefs(): Prefs {
   }
 }
 
+/** A report open in the viewer: from History (yours) or from a file someone sent (read-only). */
+export interface OpenReport {
+  report: Report;
+  thumbs: Thumbs;
+  from: 'history' | 'file';
+  fileName?: string;
+}
+
 interface AppState {
   route: Route;
   config: AppConfig | null;
   prefs: Prefs;
-  sessions: SessionRecord[] | null;
-  recordings: RecordingInfo[] | null;
+  reports: Report[] | null;
+  open: OpenReport | null;
+  /** Reports from an opened file, shown in History under their own heading. */
+  imported: { name: string; reports: Report[] } | null;
   go(route: Route): void;
   setPrefs(p: Partial<Prefs>): void;
   setConfig(c: AppConfig): void;
   refresh(): Promise<void>;
+  openReport(o: OpenReport): void;
 }
 
 export const useApp = create<AppState>((set, get) => ({
   route: 'home',
   config: null,
   prefs: loadPrefs(),
-  sessions: null,
-  recordings: null,
+  reports: null,
+  open: null,
+  imported: null,
   go: (route) => set({ route }),
   setPrefs: (p) => {
     const prefs = { ...get().prefs, ...p };
@@ -54,9 +70,10 @@ export const useApp = create<AppState>((set, get) => ({
   },
   setConfig: (config) => set({ config }),
   refresh: async () => {
-    const [sessions, recordings] = await Promise.all([api.listSessions().catch(() => []), api.listRecordings().catch(() => [])]);
-    set({ sessions, recordings });
+    const reports = await api.listReports().catch(() => []);
+    set({ reports });
   },
+  openReport: (open) => set({ open, route: 'report' }),
 }));
 
 /** Apply the theme to <html data-theme>, following the system when asked. */

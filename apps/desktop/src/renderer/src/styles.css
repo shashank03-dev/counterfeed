@@ -1,107 +1,226 @@
 @import 'tailwindcss';
 
 /*
- * Together design tokens.
- * Two people, two hues: coral is you, sage is them. Each person's gradient stays inside their own hue
- * (peach -> coral, mint -> teal), so it reads as light on one colour rather than a second colour. Anything the
- * two of you share (the sync score, the timeline, "in step") uses the dusk gradient, coral -> rose -> lilac ->
- * teal, interpolated in OKLCH so it never passes through the grey-brown an sRGB coral->sage blend produces.
- * Neutrals are warm graphite (dark) or paper (light). Components use the semantic names only.
+ * Counterfeed design tokens.
+ *
+ * Built on stepped colour scales in the manner of Radix Colors: a warm "sand" grey for every surface and line,
+ * and four named hues with real steps: tomato (Feed check, your body), jade (Review), indigo (Hook test) and plum
+ * (Focus session).
+ * Steps are chosen by job:
+ * 9 for solid fills, 10 for hover / the lower stop of a fill, 11 for text and highlights, 3-4 for tinted surfaces.
+ *
+ * Gradients follow what mature UI systems ship (Linear, Vercel/Geist, Stripe, Raycast): never across hues.
+ *  - Fills are vertical, one hue, one or two steps apart, with a 1px inner top highlight (they read as lit, not
+ *    as a gradient).
+ *  - Text gradients are neutral (full ink fading to muted ink) or one hue, top to bottom.
+ *  - The score ring and the attention curve use one hue, lighter to stronger.
+ *  - Atmosphere is a faint radial light at single-digit opacity (accent-tinted in light, neutral in dark), never a
+ *    colour wash.
+ * Event colours (breathing pause, stare, expression) are a categorical set checked for colour-blind separation and
+ * contrast in both themes; "looked away" is a grey hatched band, not a fourth hue.
+ *
+ * Dark is its own theme, not light inverted:
+ *  - A graphite ladder lit from above: bg < panel < surface < surface-2 < overlay, each step a visible lift, so
+ *    depth comes from lightness and a 1px edge (shadows barely show on near-black).
+ *  - Raised things catch light on their top edge (an inner 1px highlight); selected thumbs are lighter than their track.
+ *  - No hue washes at low opacity: a dim warm hue on near-black is brown. Colour appears only at full strength in
+ *    small areas (fills, icons, hairline edges). The page light is neutral. No coloured glow shadows.
+ *  - Secondary text keeps AA contrast (4.5:1) on every surface it sits on.
  */
 :root {
   color-scheme: dark;
-  --bg: #0c0b0a;
-  --panel: #131211;
-  --surface: #181716;
-  --surface-2: #1e1d1b;
-  --surface-3: #292724;
-  --overlay: #1c1b19;
-  --line: rgb(255 248 240 / 0.07);
-  --line-strong: rgb(255 248 240 / 0.125);
-  --fg: #efece7;
-  --fg-muted: #a6a29a;
-  --fg-dim: #6f6b64;
-  --inverse: #0c0b0a;
+  --bg: #0b0b0a;
+  --panel: #121211;
+  --surface: #1a1a19;
+  --surface-2: #222221;
+  --surface-3: #2a2a28;
+  --overlay: #262625;
+  --thumb: #2f2f2d;
+  --line: rgb(255 255 250 / 0.075);
+  --line-strong: rgb(255 255 250 / 0.13);
+  --fg: #eeeeec;
+  --fg-muted: #b5b3ad;
+  --fg-dim: #8f8e87;
+  --inverse: #111110;
+  --scrim: rgb(0 0 0 / 0.62);
 
-  --you: #ee8a63;
-  --you-deep: #e07750;
-  --them: #72bfb0;
-  --them-deep: #5aab9b;
-  --you-hi: #ffb48a;
-  --you-lo: #e2603c;
-  --them-hi: #9be3cf;
-  --them-lo: #2f9c8a;
-  --duo-1: #f08a68;
-  --duo-2: #e98aa6;
-  --duo-3: #9fa6e0;
-  --duo-4: #6cc3b4;
+  /* Tomato (you / Feed check). */
+  --you: #e54d2e;
+  --you-deep: #ec6142;
+  --you-hi: #ff977d;
+  --you-lo: #b8361b;
+  --you-soft: #391714;
+  /* Jade (the thing you watch / Review). */
+  --feed: #29a383;
+  --feed-deep: #27b08b;
+  --feed-hi: #1fd8a4;
+  --feed-lo: #1e7a62;
+  --feed-soft: #0d2d2a;
+  /* Indigo (Hook test). */
+  --hook: #5472e4;
+  --hook-hi: #9eb1ff;
+  --hook-soft: #182449;
+  --hook-meter: #5472e4;
+  /* Plum (Focus session). */
+  --focus: #ab4aba;
+  --focus-hi: #e796f3;
+  --focus-soft: #351a35;
+  --focus-ink: #e796f3;
   /* Fills that carry white text or icons: every stop keeps >= 3.3:1 contrast with white. */
-  --you-fill-1: #e06a40;
-  --you-fill-2: #c44a24;
-  --them-fill-1: #3a9c8a;
-  --them-fill-2: #22786a;
-  --ok: #7db894;
-  --warn: #d6a556;
-  --bad: #e0705e;
+  --you-fill-1: #e54d2e;
+  --you-fill-2: #d13415;
+  --feed-fill-1: #26997b;
+  --feed-fill-2: #208368;
+  --hook-fill-1: #5472e4;
+  --hook-fill-2: #3e63dd;
+  --focus-fill-1: #ab4aba;
+  --focus-fill-2: #953ea3;
+  /* Single-hue ramp for the score and the attention curve (light -> strong). */
+  --meter-1: #ff977d;
+  --meter-2: #e54d2e;
+  /* Accent text: highlight step to solid step on dark, solid to deep on light (keeps text contrast). */
+  --ink-accent-1: #ff977d;
+  --ink-accent-2: #ec6142;
+  --ev-hold: #e54d2e;
+  --ev-stare: #12a594;
+  --ev-face: #7d66d9;
+  --ev-away: #7c7b74;
+  --ok: #3dd68c;
+  --warn: #ffca16;
+  --bad: #ff9592;
 
-  --shadow-panel: 0 0 0 1px var(--line), 0 1px 0 0 rgb(255 255 255 / 0.035) inset, 0 10px 30px -14px rgb(0 0 0 / 0.65);
-  --shadow-pop: 0 0 0 1px var(--line-strong), 0 24px 64px -20px rgb(0 0 0 / 0.75);
+  /* Mode doors: light uses a soft hue wash; dark uses a lit hairline edge along the top instead. */
+  --wash: 0;
+  --wash-hover: 0;
+  --edge: 0.5;
+  --edge-hover: 0.95;
+
+  --glow: radial-gradient(1200px 560px at 50% -20%, rgb(255 255 250 / 0.045), transparent 70%);
+  --shadow-panel: 0 0 0 1px var(--line), 0 1px 0 0 rgb(255 255 255 / 0.05) inset, 0 1px 2px 0 rgb(0 0 0 / 0.4), 0 16px 40px -20px rgb(0 0 0 / 0.9);
+  --shadow-pop: 0 0 0 1px var(--line-strong), 0 1px 0 0 rgb(255 255 255 / 0.07) inset, 0 10px 24px -8px rgb(0 0 0 / 0.6), 0 32px 72px -24px rgb(0 0 0 / 0.9);
+  --shadow-fill: 0 1px 0 0 rgb(255 255 255 / 0.2) inset, 0 -1px 0 0 rgb(0 0 0 / 0.12) inset, 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-thumb: 0 0 0 1px var(--line-strong), 0 1px 0 0 rgb(255 255 255 / 0.06) inset, 0 1px 3px rgb(0 0 0 / 0.5);
+  /* The floating watch bar: an inner edge so it holds its shape over a dark desktop. */
+  --shadow-bar: 0 0 0 1px rgb(255 255 250 / 0.1) inset, 0 1px 0 0 rgb(255 255 255 / 0.05) inset;
   --stage: var(--bg);
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --bg: #f2f0ec;
-  --panel: #fbfaf8;
+  --bg: #f1f0ef;
+  --panel: #f9f9f8;
   --surface: #ffffff;
-  --surface-2: #f6f4f0;
-  --surface-3: #ebe8e3;
+  --surface-2: #f6f6f5;
+  --surface-3: #e9e8e6;
   --overlay: #ffffff;
-  --line: rgb(40 30 20 / 0.085);
-  --line-strong: rgb(40 30 20 / 0.15);
-  --fg: #1c1a17;
-  --fg-muted: #615d56;
-  --fg-dim: #908b83;
+  --line: rgb(33 32 28 / 0.08);
+  --line-strong: rgb(33 32 28 / 0.14);
+  --fg: #21201c;
+  --fg-muted: #63635e;
+  --fg-dim: #82827c;
   --inverse: #ffffff;
-  --you: #d4673f;
-  --you-deep: #c0582f;
-  --them: #3a8f80;
-  --them-deep: #2f7d6f;
-  --you-hi: #f59a70;
-  --you-lo: #c9522c;
-  --them-hi: #5fc4ac;
-  --them-lo: #23806e;
-  --duo-1: #e0714c;
-  --duo-2: #d8698f;
-  --duo-3: #7f88d4;
-  --duo-4: #33a08f;
-  --ok: #3d8a5f;
-  --warn: #a67718;
-  --bad: #c2483b;
-  --shadow-panel: 0 0 0 1px var(--line), 0 1px 2px 0 rgb(40 30 20 / 0.05), 0 10px 28px -18px rgb(40 30 20 / 0.18);
-  --shadow-pop: 0 0 0 1px var(--line), 0 24px 60px -24px rgb(40 30 20 / 0.32);
+  --thumb: #ffffff;
+  --scrim: rgb(0 0 0 / 0.4);
+  --you: #dd4425;
+  --you-deep: #d13415;
+  --you-hi: #f5a898;
+  --you-lo: #c43a1f;
+  --you-soft: #feebe7;
+  --feed: #208368;
+  --feed-deep: #1e7a62;
+  --feed-hi: #8bceb6;
+  --feed-lo: #1a6b56;
+  --feed-soft: #e6f7ed;
+  --hook: #3e63dd;
+  --hook-hi: #9eb1ff;
+  --hook-soft: #edf2fe;
+  --hook-meter: #3e63dd;
+  --focus: #ab4aba;
+  --focus-hi: #cf91d8;
+  --focus-soft: #fbebfb;
+  --focus-ink: #953ea3;
+  --you-fill-1: #dd4425;
+  --you-fill-2: #c43a1f;
+  --feed-fill-1: #26997b;
+  --feed-fill-2: #1e7a62;
+  --hook-fill-1: #3e63dd;
+  --hook-fill-2: #3358d4;
+  --focus-fill-1: #ab4aba;
+  --focus-fill-2: #953ea3;
+  --meter-1: #f5a898;
+  --meter-2: #dd4425;
+  --ink-accent-1: #e54d2e;
+  --ink-accent-2: #c43a1f;
+  --ev-hold: #dd4425;
+  --ev-stare: #0d9b8a;
+  --ev-face: #6e56cf;
+  --ev-away: #8d8d86;
+  --ok: #218358;
+  --warn: #ab6400;
+  --bad: #ce2c31;
+  --wash: 0.1;
+  --wash-hover: 0.16;
+  --edge: 0;
+  --edge-hover: 0;
+  --glow: radial-gradient(1100px 520px at 50% -18%, rgb(221 68 37 / 0.06), transparent 70%);
+  --shadow-panel: 0 0 0 1px var(--line), 0 1px 2px 0 rgb(33 32 28 / 0.04), 0 10px 28px -18px rgb(33 32 28 / 0.16);
+  --shadow-pop: 0 0 0 1px var(--line), 0 24px 60px -24px rgb(33 32 28 / 0.28);
+  --shadow-fill: 0 1px 0 0 rgb(255 255 255 / 0.22) inset, 0 -1px 0 0 rgb(0 0 0 / 0.1) inset, 0 1px 2px rgb(33 32 28 / 0.18);
+  --shadow-thumb: 0 1px 2px rgb(0 0 0 / 0.18), 0 0 0 0.5px var(--line-strong);
+  --shadow-bar: 0 0 #0000;
   --stage: var(--bg);
 }
 
-/* Gradients (see the header). Per person: within one hue. Shared: the dusk gradient. */
+/* Lit fills: one hue, top to bottom, two steps apart (see the header). */
 @utility bg-g-you {
-  background-image: linear-gradient(135deg in oklch, var(--you-fill-1), var(--you-fill-2));
+  background-image: linear-gradient(180deg, var(--you-fill-1), var(--you-fill-2));
+  box-shadow: var(--shadow-fill);
 }
-@utility bg-g-them {
-  background-image: linear-gradient(135deg in oklch, var(--them-fill-1), var(--them-fill-2));
+@utility bg-g-feed {
+  background-image: linear-gradient(180deg, var(--feed-fill-1), var(--feed-fill-2));
+  box-shadow: var(--shadow-fill);
+}
+@utility bg-g-hook {
+  background-image: linear-gradient(180deg, var(--hook-fill-1), var(--hook-fill-2));
+  box-shadow: var(--shadow-fill);
+}
+@utility bg-g-focus {
+  background-image: linear-gradient(180deg, var(--focus-fill-1), var(--focus-fill-2));
+  box-shadow: var(--shadow-fill);
+}
+@utility bg-g-hook-meter {
+  background-image: linear-gradient(180deg, color-mix(in oklab, var(--hook-meter) 78%, white), var(--hook-meter));
 }
 @utility bg-g-you-button {
-  background-image: linear-gradient(180deg in oklch, var(--you-fill-1), var(--you-fill-2));
+  background-image: linear-gradient(180deg, var(--you-fill-1), var(--you-fill-2));
 }
-@utility bg-g-duo {
-  background-image: linear-gradient(90deg in oklch, var(--duo-1), var(--duo-2) 35%, var(--duo-3) 65%, var(--duo-4));
+/* Meter bars: solid, one hue, lit from the top (never faded into the surface, which turns it muddy). */
+@utility bg-g-meter {
+  background-image: linear-gradient(180deg, color-mix(in oklab, var(--meter-2) 78%, white), var(--meter-2));
 }
-@utility text-duo {
-  background-image: linear-gradient(90deg in oklch, var(--duo-1), var(--duo-2) 35%, var(--duo-3) 65%, var(--duo-4));
+/* Headline: full ink fading to muted ink, top to bottom (no colour). */
+@utility text-g-ink {
+  background-image: linear-gradient(180deg, var(--fg) 30%, color-mix(in oklab, var(--fg) 62%, var(--bg)));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+/* Accent words: one hue, highlight step to solid step. */
+@utility text-g-accent {
+  background-image: linear-gradient(180deg, var(--ink-accent-1), var(--ink-accent-2) 85%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+/* The Focus score ring and focus bars: plum, lighter to stronger (set on a container; the ring reads --meter-*). */
+@utility meter-focus {
+  --meter-1: var(--focus-hi);
+  --meter-2: var(--focus);
+}
+/* Page atmosphere. */
+@utility bg-glow {
+  background-image: var(--glow);
 }
 
 @theme inline {
@@ -111,6 +230,8 @@
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
   --color-overlay: var(--overlay);
+  --color-thumb: var(--thumb);
+  --color-scrim: var(--scrim);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
   --color-fg: var(--fg);
@@ -119,8 +240,23 @@
   --color-inverse: var(--inverse);
   --color-you: var(--you);
   --color-you-deep: var(--you-deep);
-  --color-them: var(--them);
-  --color-them-deep: var(--them-deep);
+  --color-feed: var(--feed);
+  --color-feed-deep: var(--feed-deep);
+  --color-you-soft: var(--you-soft);
+  --color-feed-soft: var(--feed-soft);
+  --color-you-hi: var(--you-hi);
+  --color-feed-hi: var(--feed-hi);
+  --color-hook: var(--hook);
+  --color-hook-hi: var(--hook-hi);
+  --color-hook-soft: var(--hook-soft);
+  --color-focus: var(--focus);
+  --color-focus-hi: var(--focus-hi);
+  --color-focus-soft: var(--focus-soft);
+  --color-focus-ink: var(--focus-ink);
+  --color-ev-hold: var(--ev-hold);
+  --color-ev-stare: var(--ev-stare);
+  --color-ev-face: var(--ev-face);
+  --color-ev-away: var(--ev-away);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-bad: var(--bad);
@@ -129,6 +265,8 @@
   --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
   --shadow-panel: var(--shadow-panel);
   --shadow-pop: var(--shadow-pop);
+  --shadow-thumb: var(--shadow-thumb);
+  --shadow-bar: var(--shadow-bar);
   --ease-soft: var(--ease);
 }
 
@@ -239,10 +377,24 @@ textarea,
   animation: pop 260ms var(--ease) both;
 }
 
-/* The brand mark: two lights that add up where they overlap. The mark is isolated, so they blend only with
-   each other (never with the page), and the overlap reads as a bright lens on dark and paper alike. */
-.brand-dot {
-  mix-blend-mode: screen;
+/* Hatched band (looked away): texture, so it never relies on colour alone. */
+.hatch {
+  background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ev-away) 55%, transparent) 0 1.5px, transparent 1.5px 6px);
+}
+
+/* Nudge: the bar's edge glows softly while a breathing pause runs long (tomato), or while you've looked away from
+ * your work for a while in a focus session (plum: the bar sets --nudge). A state signal, not decoration. */
+@keyframes glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--nudge, var(--you)) 40%, transparent), 0 0 0 0 color-mix(in srgb, var(--nudge, var(--you)) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--nudge, var(--you)) 70%, transparent), 0 0 28px 2px color-mix(in srgb, var(--nudge, var(--you)) 45%, transparent);
+  }
+}
+.nudge {
+  animation: glow 3s var(--ease) infinite;
 }
 
 /* The brand mark breathes: 4 s in, 6 s out (a calm resting rhythm). */
@@ -336,6 +488,17 @@ textarea,
 }
 .shake {
   animation: shake 320ms ease-in-out;
+}
+
+/* Score ring draws in. */
+@keyframes ring {
+  from {
+    stroke-dasharray: 0.001 9999;
+  }
+}
+.ring-in {
+  animation: ring 1.2s var(--ease) both;
+  animation-delay: 150ms;
 }
 
 /* Countdown numerals between phases. */

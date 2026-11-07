@@ -16,7 +16,7 @@ export class Emitter<E extends Record<string, unknown[]>> {
       try {
         (fn as unknown as (...a: E[K]) => void)(...args);
       } catch (err) {
-        console.error(`[together] listener for "${String(event)}" failed`, err);
+        console.error(`[counterfeed] listener for "${String(event)}" failed`, err);
       }
     }
   }

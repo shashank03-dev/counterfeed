@@ -5,16 +5,17 @@ import { api } from './lib/api';
 import { useSession } from './session/store';
 import { Toasts } from './ui/kit';
 import { BrandMark } from './ui/viz';
-import { Diagnostics } from './ui/screens/Diagnostics';
+import { CameraCheck } from './ui/screens/CameraCheck';
 import { History } from './ui/screens/History';
 import { Home } from './ui/screens/Home';
+import { ReportView } from './ui/screens/ReportView';
 import { Settings } from './ui/screens/Settings';
-import { Stage } from './ui/screens/Stage';
+import { Stage } from './ui/stage/Stage';
 
 export function App() {
   const config = useApp((s) => s.config);
   const route = useApp((s) => s.route);
-  const inSession = useSession((s) => s.ctx.state !== 'idle');
+  const inSession = useSession((s) => s.step !== 'idle');
 
   useEffect(() => {
     void api.getConfig().then((c) => useApp.getState().setConfig(c));
@@ -24,8 +25,8 @@ export function App() {
   // ⌘1-3 and ⌘, between sections (not during a session).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!e.metaKey || useSession.getState().ctx.state !== 'idle') return;
-      const map: Record<string, Parameters<ReturnType<typeof useApp.getState>['go']>[0]> = { '1': 'home', '2': 'history', '3': 'diagnostics', ',': 'settings' };
+      if (!e.metaKey || useSession.getState().step !== 'idle') return;
+      const map: Record<string, Parameters<ReturnType<typeof useApp.getState>['go']>[0]> = { '1': 'home', '2': 'history', '3': 'camera', ',': 'settings' };
       const r = map[e.key];
       if (r) {
         e.preventDefault();
@@ -38,7 +39,7 @@ export function App() {
 
   if (!config) {
     return (
-      <div className="drag grid h-full place-items-center">
+      <div className="drag grid h-full place-items-center [--mark-ring:var(--bg)]">
         <BrandMark size={44} />
       </div>
     );
@@ -56,8 +57,9 @@ export function App() {
             <div key={route} className="scroll fade h-full">
               {route === 'home' && <Home />}
               {route === 'history' && <History />}
-              {route === 'diagnostics' && <Diagnostics />}
+              {route === 'camera' && <CameraCheck />}
               {route === 'settings' && <Settings />}
+              {route === 'report' && <ReportView />}
             </div>
           </main>
         </div>

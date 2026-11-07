@@ -24,7 +24,7 @@ export function cx(...c: (string | false | null | undefined | 0)[]) {
 type Variant = 'primary' | 'you' | 'subtle' | 'ghost' | 'danger' | 'quiet-danger';
 const VARIANT: Record<Variant, string> = {
   primary: 'bg-fg text-inverse font-medium hover:bg-fg/90 shadow-[0_1px_0_0_rgb(255_255_255/0.18)_inset,0_6px_16px_-10px_rgb(0_0_0/0.6)] disabled:bg-fg/[0.1] disabled:text-fg-dim disabled:shadow-none',
-  you: 'text-white font-medium bg-you-deep bg-g-you-button hover:brightness-[1.07] active:brightness-95 shadow-[0_1px_0_0_rgb(255_255_255/0.2)_inset,0_6px_18px_-10px_var(--you)] disabled:bg-none disabled:bg-fg/[0.1] disabled:text-fg-dim disabled:shadow-none disabled:brightness-100',
+  you: 'text-white font-medium bg-you-deep bg-g-you-button hover:brightness-[1.07] active:brightness-95 shadow-[var(--shadow-fill)] disabled:bg-none disabled:bg-fg/[0.1] disabled:text-fg-dim disabled:shadow-none disabled:brightness-100',
   subtle: 'bg-surface-2 text-fg border border-line-strong hover:bg-surface-3',
   ghost: 'text-fg-muted hover:text-fg hover:bg-fg/[0.06]',
   danger: 'bg-bad text-white font-medium hover:brightness-110 shadow-[0_1px_0_0_rgb(255_255_255/0.2)_inset]',
@@ -220,7 +220,7 @@ export function CheckRow({ checked, onChange, title, children, testId }: { check
       <span
         className={cx(
           'mt-[1px] grid size-[18px] shrink-0 place-items-center rounded-[6px] border transition-all duration-200',
-          checked ? 'border-transparent bg-g-you text-white shadow-[0_2px_8px_-3px_var(--you)]' : 'border-line-strong bg-surface-2 text-transparent group-hover:border-fg-dim',
+          checked ? 'border-transparent bg-g-you text-white' : 'border-line-strong bg-surface-2 text-transparent group-hover:border-fg-dim',
         )}
       >
         <Icon.Check size={12} strokeWidth={2.4} />
@@ -246,7 +246,7 @@ export function Segmented<T extends string>({ value, onChange, options, label, s
       {thumb && (
         <span
           aria-hidden
-          className="absolute top-[3px] bottom-[3px] rounded-[8px] bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.18),0_0_0_0.5px_var(--line-strong)] transition-[transform,width] duration-300 ease-soft"
+          className="absolute top-[3px] bottom-[3px] rounded-[8px] bg-thumb shadow-thumb transition-[transform,width] duration-300 ease-soft"
           style={{ transform: `translateX(${thumb.x - 3}px)`, width: thumb.w }}
         />
       )}
@@ -392,7 +392,7 @@ export function Dialog({ open, onClose, label, children, width = 460 }: { open: 
   if (!open) return null;
   return createPortal(
     <div className="fade fixed inset-0 z-[70] grid place-items-center p-6">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-[3px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-scrim backdrop-blur-[3px]" onClick={onClose} />
       <div ref={ref} role="dialog" aria-modal="true" aria-label={label} style={{ width }} className="pop relative max-h-[calc(100vh-48px)] max-w-full overflow-auto rounded-[16px] bg-overlay shadow-pop">
         {children}
       </div>

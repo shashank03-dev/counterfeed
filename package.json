@@ -1,8 +1,8 @@
 {
-  "name": "together",
+  "name": "counterfeed",
   "private": true,
   "version": "1.0.0",
-  "description": "Breathe in step with someone, wherever they are.",
+  "description": "Your feed measures you. Measure it back.",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -12,15 +12,13 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev -w @together/desktop",
-    "dev:peer2": "npm run dev:peer2 -w @together/desktop",
-    "signal": "npm run start -w @together/signal",
-    "build": "npm run build -w @together/desktop",
-    "dist": "npm run dist -w @together/desktop",
+    "dev": "npm run dev -w @counterfeed/desktop",
+    "build": "npm run build -w @counterfeed/desktop",
+    "dist": "npm run dist -w @counterfeed/desktop",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "npm run e2e -w @together/desktop",
-    "typecheck": "tsc -p packages/shared --noEmit && tsc -p apps/signal --noEmit && tsc -p apps/desktop/tsconfig.node.json --noEmit && tsc -p apps/desktop/tsconfig.web.json --noEmit && tsc -p apps/desktop/tsconfig.test.json --noEmit",
+    "e2e": "npm run e2e -w @counterfeed/desktop",
+    "typecheck": "tsc -p packages/shared --noEmit && tsc -p apps/desktop/tsconfig.node.json --noEmit && tsc -p apps/desktop/tsconfig.web.json --noEmit && tsc -p apps/desktop/tsconfig.test.json --noEmit",
     "lint": "eslint .",
     "check": "npm run lint && npm run typecheck && npm test"
   },

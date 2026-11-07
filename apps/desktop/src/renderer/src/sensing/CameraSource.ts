@@ -1,18 +1,20 @@
-import { breathingMetrics, MetricType, ProcessingStatus, SmartSpectraErrorCode, SmartSpectraSDK } from '@smartspectra/node-sdk/renderer';
+import { breathingMetrics, cardioMetrics, MetricType, ProcessingStatus, SmartSpectraErrorCode, SmartSpectraSDK } from '@smartspectra/node-sdk/renderer';
 import { decodeMetrics } from '@smartspectra/node-sdk/messages';
 import { Emitter } from '../lib/emitter';
 import { normalize, type DecodedMetrics } from './normalize';
+import { nowUs } from '../lib/time';
 import { applyValidation, V } from './quality';
 import type { Quality, SensingProblem, SignalSource, SourceEvents, SourceStatus } from './types';
 
 /**
- * Your own signals, measured on this laptop by the SmartSpectra renderer SDK.
+ * Body signals measured on this Mac by the SmartSpectra renderer SDK.
  *
- * - `await sdk.start()` acquires the front camera (1280x720 / 30 fps, exposure/white balance/focus locked once
- *   Running) and emits 'streamAvailable'; that same MediaStream is the video we send on the call.
- * - Requested: the breathing bundle, plus PULSE_RATE, TALKING and EXPRESSIONS hand-picked rather than the full
- *   cardio/face bundles ("Combine bundles or hand-pick MetricType codes", docs/nodejs/metrics.md). That skips
- *   478-point face landmarks, HRV and the pressure waveform, which Together never uses.
+ * - `await sdk.start()` acquires the front camera (1280x720 / 30 fps) and emits 'streamAvailable'; that stream
+ *   is only shown as a small framing preview. No frame is stored or sent anywhere by Counterfeed.
+ * - Requested: the breathing bundle (wave, rate, breath-stop detection), the cardio bundle (pulse, HRV) and the
+ *   face bundle (landmarks, blinking, talking, expressions). The 478 face landmarks are reduced on arrival to two
+ *   head-pose ratios (see normalize.ts) and never kept: they tell "turned away" apart from "chest out of view",
+ *   which the SDK's single validation code can't (it reports one problem at a time).
  * - Telemetry is off (`enableTelemetry: false`).
  */
 export class CameraSource implements SignalSource {
@@ -24,9 +26,14 @@ export class CameraSource implements SignalSource {
   private processing = 'Uninitialized';
   private quality: Quality | null = null;
   private pendingCode: { code: number; hint: string; timer: ReturnType<typeof setTimeout> } | null = null;
-  private counters = { metrics: 0, trace: 0, since: performance.now(), lastAt: 0, rateMetrics: 0, rateTrace: 0 };
+  private counters = { metrics: 0, since: performance.now(), lastAt: 0, rateMetrics: 0 };
 
-  constructor(private readonly apiKey: string) {}
+  constructor(
+    private readonly apiKey: string,
+    /** Developer runs only: keep one raw landmark set a second on the page, to check the pose maths. */
+    private readonly recordRaw = false,
+  ) {}
+  private lastRawAt = 0;
 
   get stream() {
     return this._stream;
@@ -52,7 +59,7 @@ export class CameraSource implements SignalSource {
   private build() {
     const sdk = new SmartSpectraSDK({
       apiKey: this.apiKey,
-      requestedMetrics: [...breathingMetrics, MetricType.PULSE_RATE, MetricType.TALKING, MetricType.EXPRESSIONS],
+      requestedMetrics: [...breathingMetrics, ...cardioMetrics, MetricType.FACE_LANDMARKS, MetricType.BLINKING, MetricType.TALKING, MetricType.EXPRESSIONS],
       enableTelemetry: false,
     });
     const statusName = Object.fromEntries(Object.entries(ProcessingStatus).map(([k, v]) => [v, k.slice(1)]));
@@ -74,20 +81,24 @@ export class CameraSource implements SignalSource {
       } catch {
         return; // a malformed packet is skipped, never fatal
       }
-      const n = normalize(decoded);
       this.counters.metrics++;
       this.counters.lastAt = performance.now();
-      this.counters.trace += n.frames.filter((f) => f.trace !== undefined).length;
-      if (n.frames.length) this.ev.emit('frames', n.frames);
-      if (n.breathingRate) this.ev.emit('rate', n.breathingRate);
-      if (n.pulse) this.ev.emit('pulse', n.pulse);
-      if (n.talking) this.ev.emit('talking', n.talking);
-      if (n.expressions.length) this.ev.emit('expressions', n.expressions);
+      if (this.recordRaw) this.keepRaw(decoded);
+      this.ev.emit('metrics', normalize(decoded));
     });
     sdk.on('error', (code, message) => {
       this.problem(mapSdkError(code), message);
     });
     return sdk;
+  }
+
+  private keepRaw(d: DecodedMetrics) {
+    const l = d.face?.landmarks?.at(-1);
+    const now = performance.now();
+    if (!l?.value?.length || now - this.lastRawAt < 1000) return;
+    this.lastRawAt = now;
+    const w = window as unknown as { __counterfeedRawLandmarks?: unknown[] };
+    (w.__counterfeedRawLandmarks ??= []).push({ t: nowUs(), n: l.value.length, points: l.value.map((p) => [p.x, p.y]) });
   }
 
   /** The SDK may flicker between OK and a borderline code; only report a code that holds for 400 ms. */
@@ -102,7 +113,7 @@ export class CameraSource implements SignalSource {
     const timer = setTimeout(() => {
       this.pendingCode = null;
       this.quality = applyValidation(this.quality, code, hint);
-      this.ev.emit('quality', this.quality);
+      this.ev.emit('quality', this.quality, nowUs());
     }, this.quality ? 400 : 0);
     this.pendingCode = { code, hint, timer };
   }
@@ -159,14 +170,11 @@ export class CameraSource implements SignalSource {
     const dt = (now - this.counters.since) / 1000;
     if (dt >= 1) {
       this.counters.rateMetrics = this.counters.metrics / dt;
-      this.counters.rateTrace = this.counters.trace / dt;
       this.counters.metrics = 0;
-      this.counters.trace = 0;
       this.counters.since = now;
     }
     return {
       metricsPerSec: this.counters.rateMetrics,
-      tracePerSec: this.counters.rateTrace,
       processing: this.processing,
       lastMetricAgeMs: this.counters.lastAt ? now - this.counters.lastAt : null,
     };

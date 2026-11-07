@@ -1,146 +1,166 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import type { Report } from '@counterfeed/shared';
 import { useApp } from '../../app/store';
 import { api } from '../../lib/api';
 import { Icon } from '../icons';
-import { Button, Confirm, cx, IconButton, toast } from '../kit';
+import { Button, Confirm, Segmented, toast } from '../kit';
 import { Page } from '../Page';
-import { Sparkline } from '../viz';
-import { formatDate, verdict } from '../format';
-import { Results } from './Results';
+import { sourceLabel } from '../format';
+import { ReportRow } from './Home';
 
+export async function exportAll() {
+  const r = await api.exportAll();
+  if (r.saved) toast({ title: `Exported ${r.count} ${r.count === 1 ? 'report' : 'reports'}`, body: 'Numbers and your answers only. No pictures.' });
+}
+
+export async function openFile() {
+  const r = await api.openReportFile();
+  if (!r) return;
+  if ('error' in r) return toast({ title: 'Couldn’t open that file', body: r.error, tone: 'warn' });
+  useApp.setState({ imported: { name: r.name, reports: r.file.reports }, route: 'history' });
+  toast({ title: `Opened ${r.file.reports.length} ${r.file.reports.length === 1 ? 'report' : 'reports'}`, body: 'Shown read-only. They aren’t added to your History.' });
+}
+
+/** Every report on this Mac, a per-feed comparison, and reports opened from a file. */
 export function History() {
-  const { sessions, recordings, refresh } = useApp();
-  const [open, setOpen] = useState<string | null>(null);
-  const [wipe, setWipe] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const selected = sessions?.find((s) => s.id === open) ?? null;
-
-  if (selected) {
-    return (
-      <div>
-        <div className="sticky top-0 z-10 flex items-center gap-2 bg-panel/85 px-6 pt-12 pb-2 backdrop-blur">
-          <Button variant="ghost" size="sm" onClick={() => setOpen(null)} icon={<Icon.ChevronRight className="rotate-180" />}>
-            All sessions
-          </Button>
-        </div>
-        <Results record={selected} />
-      </div>
-    );
-  }
-
-  const exportAll = async () => {
-    setBusy(true);
-    try {
-      const r = await api.exportAll();
-      if (r.saved) toast({ title: 'Exported', body: `${r.count} session${r.count === 1 ? '' : 's'} saved as JSON` });
-    } catch {
-      toast({ title: 'Export failed', tone: 'bad' });
-    } finally {
-      setBusy(false);
-    }
-  };
-  const deleteAll = async () => {
-    const r = await api.deleteAll();
-    await refresh();
-    toast({ title: 'Everything deleted', body: `${r.sessions} sessions and ${r.recordings} recordings removed from this laptop` });
-  };
+  const { reports, refresh, imported } = useApp();
+  const [filter, setFilter] = useState<'all' | Report['mode']>('all');
+  const [del, setDel] = useState<Report | null>(null);
+  const [delAll, setDelAll] = useState(false);
+  const list = (reports ?? []).filter((r) => filter === 'all' || r.mode === filter);
 
   return (
     <Page
       title="History"
-      subtitle="Every session you’ve finished, kept only on this laptop."
+      subtitle="Every report stays on this Mac until you delete it. Exports carry numbers and your answers, never pictures."
       actions={
         <>
-          <Button icon={<Icon.Download />} onClick={() => void exportAll()} busy={busy} disabled={!sessions?.length} data-testid="export">
-            Export JSON
+          <Button size="sm" icon={<Icon.Open />} onClick={() => void openFile()} data-testid="open-file">
+            Open a report file
           </Button>
-          <Button variant="quiet-danger" icon={<Icon.Trash />} onClick={() => setWipe(true)} disabled={!sessions?.length && !recordings?.length} data-testid="delete-all">
+          <Button size="sm" icon={<Icon.Download />} onClick={() => void exportAll()} disabled={!reports?.length} data-testid="export">
+            Export
+          </Button>
+          <Button size="sm" variant="quiet-danger" icon={<Icon.Trash />} onClick={() => setDelAll(true)} disabled={!reports?.length} data-testid="delete-all">
             Delete all
           </Button>
         </>
       }
     >
-      {!sessions ? null : sessions.length === 0 ? (
-        <div className="rounded-[18px] border border-dashed border-line-strong px-6 py-16 text-center" data-testid="history-empty">
-          <Icon.History size={26} className="mx-auto text-fg-dim" />
-          <div className="mt-4 text-[15px] font-medium">No sessions yet</div>
-          <p className="mx-auto mt-1 max-w-[340px] text-[13px] leading-relaxed text-fg-muted">When you finish a session, its results, the words you picked and your Moments land here. Nothing is uploaded.</p>
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-[16px] bg-surface shadow-panel" role="list" data-testid="history-list">
-          <div className="grid grid-cols-[1.4fr_1.2fr_130px_1fr_36px] gap-4 border-b border-line px-5 py-2.5 text-[11px] font-medium tracking-[0.06em] text-fg-dim uppercase">
-            <span>When</span>
-            <span>Together</span>
-            <span>Over time</span>
-            <span>You felt</span>
-            <span />
+      {imported && (
+        <section className="mb-8" data-testid="imported">
+          <div className="mb-2.5 flex items-center justify-between">
+            <h2 className="text-[11px] font-semibold tracking-[0.07em] text-fg-dim uppercase">Opened from {imported.name}</h2>
+            <Button size="sm" variant="ghost" icon={<Icon.X />} onClick={() => useApp.setState({ imported: null })}>
+              Close
+            </Button>
           </div>
-          {sessions.map((s, i) => {
-            const v = verdict(s.together);
-            return (
-              <div key={s.id} role="listitem" className={cx('group grid grid-cols-[1.4fr_1.2fr_130px_1fr_36px] items-center gap-4 px-5 py-3.5 transition-colors hover:bg-surface-2', i > 0 && 'border-t border-line')}>
-                <button type="button" onClick={() => setOpen(s.id)} className="min-w-0 text-left" data-testid="history-row">
-                  <div className="truncate text-[13px] font-medium">{formatDate(s.startedAt)}</div>
-                  <div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-fg-dim">
-                    {s.replay ? 'Practice with a replay' : s.role === 'host' ? 'You started it' : 'You joined'}
-                    {s.partial && <span className="rounded-[5px] bg-fg/[0.07] px-1.5 py-px">ended early</span>}
-                  </div>
-                </button>
-                <div className={cx('text-[13px]', v.strong ? 'font-medium text-fg' : 'text-fg-muted')}>{v.short}</div>
-                <Sparkline values={s.together?.series ?? s.apart?.series ?? []} width={120} height={26} />
-                <div className="truncate text-[12.5px] text-fg-muted">
-                  {s.moods.you.start ?? '–'} → {s.moods.you.end ?? '–'}
-                </div>
-                <IconButton
-                  label="Delete this session"
-                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                  onClick={async () => {
-                    await api.deleteSession(s.id);
-                    await refresh();
-                  }}
-                >
-                  <Icon.Trash />
-                </IconButton>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {!!recordings?.length && (
-        <div className="mt-8">
-          <h2 className="mb-2.5 text-[11px] font-semibold tracking-[0.07em] text-fg-dim uppercase">Recordings for replay</h2>
-          <div className="overflow-hidden rounded-[16px] bg-surface shadow-panel">
-            {recordings.map((r, i) => (
-              <div key={r.id} className={cx('group flex items-center gap-4 px-5 py-3', i > 0 && 'border-t border-line')}>
-                <Icon.Wave className="text-you" />
-                <div className="flex-1 text-[13px]">{formatDate(r.recordedAt)}</div>
-                <div className="tnum text-[12px] text-fg-dim">
-                  {Math.round(r.durationMs / 60000)} min · {(r.bytes / 1024).toFixed(0)} KB · numbers only
-                </div>
-                <IconButton
-                  label="Delete recording"
-                  onClick={async () => {
-                    await api.deleteRecording(r.id);
-                    await refresh();
-                  }}
-                >
-                  <Icon.Trash />
-                </IconButton>
-              </div>
+          <div className="grid gap-2">
+            {imported.reports.map((r) => (
+              <ReportRow key={r.id} r={r} readOnly />
             ))}
           </div>
+        </section>
+      )}
+
+      <FeedCompare reports={reports ?? []} />
+
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <Segmented
+          label="Show"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'feed', label: 'Feed checks' },
+            { value: 'review', label: 'Reviews' },
+            { value: 'hooks', label: 'Hook tests' },
+            { value: 'focus', label: 'Focus' },
+          ]}
+        />
+        <span className="tnum text-[12px] text-fg-dim">{list.length} shown</span>
+      </div>
+      {list.length ? (
+        <div className="grid gap-2" data-testid="history-list">
+          {list.map((r) => (
+            <ReportRow key={r.id} r={r} onDelete={() => setDel(r)} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-[16px] border border-dashed border-line-strong px-5 py-10 text-center text-[13px] text-fg-muted" data-testid="history-empty">
+          No reports yet. Start a feed check, a review, a hook test or a focus session from Home.
         </div>
       )}
 
       <Confirm
-        open={wipe}
-        onClose={() => setWipe(false)}
-        title="Delete everything?"
-        body="All sessions, Moments, moods and recordings are removed from this laptop. This can’t be undone; export first if you want a copy."
-        confirmLabel="Delete everything"
-        onConfirm={() => void deleteAll()}
+        open={!!del}
+        title="Delete this report?"
+        body="It’s removed from this Mac, with its pictures. This can’t be undone."
+        confirmLabel="Delete"
+        onClose={() => setDel(null)}
+        onConfirm={async () => {
+          if (!del) return;
+          await api.deleteReport(del.id);
+          await refresh();
+          toast({ title: 'Report deleted' });
+        }}
+      />
+      <Confirm
+        open={delAll}
+        title="Delete every report?"
+        body="All reports and their pictures are removed from this Mac. This can’t be undone."
+        confirmLabel="Delete all"
+        onClose={() => setDelAll(false)}
+        onConfirm={async () => {
+          const r = await api.deleteAll();
+          await refresh();
+          toast({ title: `Deleted ${r.reports} ${r.reports === 1 ? 'report' : 'reports'}` });
+        }}
       />
     </Page>
+  );
+}
+
+/** Your feeds side by side: the average Pull for each thing you've checked at least once. */
+function FeedCompare({ reports }: { reports: Report[] }) {
+  const rows = useMemo(() => {
+    const by = new Map<string, Report[]>();
+    for (const r of reports) {
+      if (r.mode !== 'feed' || r.pull.score === null) continue;
+      const k = sourceLabel(r);
+      by.set(k, [...(by.get(k) ?? []), r]);
+    }
+    return [...by]
+      .map(([name, rs]) => {
+        // Pauses per minute only over sessions where breathing could be read.
+        const read = rs.filter((r) => r.metrics.holds !== null);
+        return {
+          name,
+          n: rs.length,
+          pull: Math.round(rs.reduce((s, r) => s + r.pull.score!, 0) / rs.length),
+          holds: read.length ? read.reduce((s, r) => s + r.metrics.holds!, 0) / Math.max(1, read.reduce((s, r) => s + r.watchMs, 0) / 60_000) : null,
+        };
+      })
+      .sort((a, b) => b.pull - a.pull);
+  }, [reports]);
+  if (rows.length < 2) return null;
+  return (
+    <section className="mb-8 rounded-[18px] bg-surface p-5 shadow-panel" data-testid="feed-compare">
+      <h2 className="text-[14px] font-semibold">Your feeds, side by side</h2>
+      <p className="mt-0.5 mb-4 text-[12.5px] text-fg-muted">Average Pull for each thing you’ve checked. Only you, against your own normal.</p>
+      <div className="grid gap-3">
+        {rows.map((r) => (
+          <div key={r.name} className="grid items-center gap-x-4 sm:grid-cols-[200px_1fr_150px]">
+            <div className="truncate text-[13px] font-medium">{r.name}</div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-fg/[0.07]">
+              <div className="h-full rounded-full bg-g-meter" style={{ width: `${Math.max(2, r.pull)}%` }} />
+            </div>
+            <div className="tnum text-right text-[12px] text-fg-muted">
+              Pull {r.pull} · {r.holds === null ? '–' : r.holds.toFixed(1)} pauses/min · {r.n}×
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

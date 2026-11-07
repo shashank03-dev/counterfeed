@@ -1,12 +1,13 @@
-# Together
+# Counterfeed
 
-**See each other breathe, then try breathing as one.**
+**Your feed measures you. Measure it back.**
 
-Together is a desktop video call for two people, each on their own Mac. You talk, then spend a few quiet minutes breathing: first apart (you only see your own breathing), then together (both waves overlaid, with a live "in step" meter that marks what chance alone would give). At the end you see how in step you were, measured and compared against chance.
+Counterfeed is a Mac app that watches your breathing, blinking and gaze with the camera (Presage SmartSpectra, on this Mac) while you scroll or review something, then shows you, in one page, what it did to your attention.
 
-**Session length** (Home, next to the session plan): **Full** is 2 min apart + 3 min together; **Short** is 1 min apart + 1.5 min together. The person who starts the room picks; the other Mac follows the host's timings.
-
-Each laptop measures **only its own person** with the Presage SmartSpectra SDK, on that laptop. Only a few derived numbers per second (breathing wave height, pulse, talking yes/no) cross the network, alongside the normal encrypted call media.
+- **Feed check.** Scroll Instagram, TikTok, YouTube or anything else (your real phone apps through iPhone Mirroring, or any browser tab). Counterfeed shrinks to a small bar that notices breathing pauses, long stares and looking away as they happen. Then you get a **Pull score**, the moments that hooked you with a picture of what was on screen, and one small suggestion built from your own numbers.
+- **Review a project.** For judges and reviewers. Play a demo video inside Counterfeed, or try an app in any window. The report shows **where it held you and where it lost you** along the video, how the first 30 seconds went, and your own scores next to what your body did. Click any moment to play the video from there.
+- **Test your hooks.** For creators. Drop in 2 to 6 short clips (or use the bundled demo pack) and scroll them like a feed: each plays once, and you swipe on (↓, scroll, or *Next*) whenever you would. Then pick the one you'd post, and see **which clip held you hardest, the second it grabbed you, and where you swiped away**, with your pick next to what your body chose.
+- **Focus on one thing.** Name the task, set a timer (2, 10, 25 or 50 minutes, or until you stop) and work. Counterfeed turns on your Mac's **Do Not Disturb**, shrinks to a bar with a countdown (*Focused · 6:12*, or *Looking away · 12 s*), and notes which app is in front. Then a **Focus score**: how much of the time your eyes stayed on the work, your longest stretch without a break, a map of the session, and **where your focus went, app by app**, next to how focused it felt.
 
 Built for the DEV *Presage SmartSpectra SDK Challenge*.
 
@@ -14,230 +15,151 @@ Built for the DEV *Presage SmartSpectra SDK Challenge*.
 
 ## Setup
 
-Requirements: macOS on Apple Silicon, **Node 24 LTS** (`.nvmrc`), a SmartSpectra API key from <https://physiology.presagetech.com/>.
+Requirements: macOS on Apple Silicon, **Node 24 LTS** (`.nvmrc`), a free SmartSpectra API key from <https://physiology.presagetech.com/>.
 
 ```bash
 npm install
-cp .env.example .env      # then put your key in SMARTSPECTRA_API_KEY
+cp .env.example .env      # then put your key in SMARTSPECTRA_API_KEY (or paste it in Settings later)
+npm run dev
 ```
 
 The key is read by the Electron **main** process only (from `.env`, or saved encrypted to your Keychain from Settings) and handed to the renderer once through a narrow preload API. `.env` is git-ignored and never logged.
 
-## Run
+On first use macOS asks for **Camera** access (measuring) and, for a feed check, **Screen Recording** (small pictures of the window you pick). Without Screen Recording you can still choose **Without pictures**.
 
-```bash
-npm run dev               # the desktop app, with its signaling server built in
-```
+**Credits.** SmartSpectra's free tier is 100 credits, 1 credit per 30 s of measuring. A 5-minute feed check is about 12 credits (40 s settle + 5 min); the setup screen shows the estimate before you start. A 25-minute focus session is about 52 credits; the 2-minute option is there to try it.
 
-**The app carries its own backend.** When the connection server is on this Mac (`ws://localhost:8787`, the default), the main process starts the same signaling server `npm run signal` runs, listening on the local network, and stops it on quit. If a Together server already owns the port (a second instance, or `npm run signal`), the app uses that one. If something else owns the port, Settings says so instead of failing silently.
-
-**Two Macs on the same Wi-Fi.** Open Together on both. On the Mac that hosts, **Settings › Connection** shows `This Mac hosts rooms` and an address like `ws://192.168.1.20:8787` with a Copy button. On the other Mac, paste that address into its connection server and Save. Then Start a room on one and Join on the other.
-
-**Different networks.** Run `npm run signal` on a server both can reach (behind TLS it becomes `wss://…`; set `TRUST_PROXY=1` behind a reverse proxy), and point both apps at it with `SIGNAL_URL` in `.env` or in Settings.
-
-Some networks (offices, some hotspots, symmetric NAT) block direct peer-to-peer calls. Set `TURN_URL`, `TURN_USER`, `TURN_PASS` (or fill them in **Settings › Connection › Advanced**) to relay the call through a TURN server. The app says so when a call can't connect.
-
-### Solo demo (one person, one Mac)
-
-1. **Camera check** (sidebar) → **Start camera check**. Plain readouts (breathing, heart rate) and a checklist (light, framing, stillness, breathing signal) confirm the measurement works.
-2. After a minute of measured breathing, **Keep as partner** saves that minute as a recording (signal numbers only, never video).
-3. **Home › Practice** runs a full session against that replay. It loops for the whole session and is always shown as a **"Replayed session"**, never as a live person.
-
-Credits: SmartSpectra's free tier is 100 credits at 30 s each (about 50 minutes of measurement). A Full session is about 6–8 minutes of measurement per laptop (12–16 credits), a Short one about 4–5 minutes (8–10 credits); a camera check is about 1 minute. Each laptop bills its own key, so give the second Mac its own free key for rehearsals.
-
-### Two peers on one Mac (development)
-
-Only one app can own the camera, so the second instance replays a recording:
-
-1. In the first instance, turn on **Record my signals** on the consent screen and finish a session (recordings hold numbers only, never video).
-2. `npm run dev:peer2` starts a second instance with its own profile. It has no camera and sends the most recent recording as its signal; the other side shows a permanent **"Replayed session"** banner.
-
-### Demo modes (always labelled)
-
-| Mode | What it is | How it's labelled |
-| --- | --- | --- |
-| **Record my signals** | Writes your outgoing SignalFrames (and phase marks) to JSONL in your profile. No video, no audio. | A red "Rec" dot in the top bar |
-| **Practice** (Home) | Breathe with a replay of a recorded session, or of a camera check you kept, through the same `Peer` interface as a live partner. It follows the session's phases when the recording has them, and loops when it runs out. | Permanent "Replayed session (recorded …)" banner; Results and History say "Practice with a replay" |
-| **Peer 2** | Second dev instance replays a recording as *its own* signal over the real network. | Both sides show it is a recording |
-
-Never fed into the SDK: synthetic or AI-generated video. The automated test suite uses a clearly labelled **test signal** instead of the SDK (see Testing); that seam is compiled in but cannot switch on in a packaged app.
+**Do Not Disturb (focus sessions).** macOS gives apps no public switch for Focus, so Counterfeed uses Shortcuts. Make two shortcuts once, each with the single action *Set Focus*: **Counterfeed Focus On** (turn Do Not Disturb on, until turned off) and **Counterfeed Focus Off** (turn it off). The setup screen finds them and offers a switch; without them it shows these steps and the session runs the same. Counterfeed turns it off on every way a session ends (time up, stop, cancel, a camera problem, closing the app), and if the app crashed with it on, at the next launch.
 
 ### Package
 
 ```bash
-npm run dist              # release/Together-*.dmg (arm64)
+npm run dist              # release/Counterfeed-*.dmg (arm64)
 ```
 
-The SmartSpectra native runtime is copied to `Resources/smartspectra/` (a `.dylib` can't be loaded from inside `app.asar`), as in Presage's electron-quickstart. `Info.plist` carries camera and microphone usage strings; entitlements are in `apps/desktop/build/entitlements.mac.plist`. Sign with your own identity for distribution.
+The SmartSpectra native runtime is copied to `Resources/smartspectra/` (a `.dylib` can't load from inside `app.asar`), as in Presage's electron-quickstart.
+
+---
+
+## For judges: the fastest way to see it
+
+1. `npm run dev`, add your key in **Settings**.
+2. **Camera check** (sidebar): confirm light and framing; hold your breath and watch the wave go flat.
+3. **Review a project** › **A demo video** › pick any demo MP4 (another entry's video works well). Tick the three lines, sit still for ~40 s while it finds your normal, then watch. At the end, rate it; the report puts your scores next to where it actually held you.
+4. Or **Check a feed** › pick **iPhone Mirroring** (or a browser tab with Reels/Shorts) › 2 min.
+5. Or **Test your hooks** › **Use the demo pack** › Start. About 40 s for your normal, then five 10-second clips; swipe the dull ones. Under 2 minutes, no setup.
+6. Or **Focus on one thing** › 2 min › Start, then work in another app. Look down at your phone for 15 seconds halfway: the bar says *Looking away*, and the report shows one break on the map and the apps you used.
+
+No key? Open a report someone exported: **History › Open a report file** shows it read-only (exports never contain pictures).
 
 ---
 
 ## How it works
 
 ```
- ┌──────────────────────────── Laptop A ────────────────────────────┐        ┌──────── Laptop B ────────┐
- │ main process                                                     │        │      (same app)          │
- │   bindSmartSpectraIpc ◄── MessagePort ──┐   storage (JSON/JSONL) │        │                          │
- │   .env / Keychain key  ── getConfig ─┐  │   in userData           │        │                          │
- │                                      ▼  │                         │        │                          │
- │ renderer                                                          │        │                          │
- │   SensingService (SmartSpectra renderer SDK, camera 720p30)       │        │                          │
- │      │ metrics ─► normalize ─► SignalFrame {t, trace, pulse, …}   │        │                          │
- │      │ camera MediaStream ──────────────┐                         │        │                          │
- │      ▼                                  ▼                         │        │                          │
- │   Session (state machine, host-driven)  PeerSession (WebRTC)  ◄══╪══ media (DTLS-SRTP, P2P) ══►        │
- │      │  clock sync · batching 10 Hz     data channel "signals" ◄══╪══ SignalFrames / phase / bye ══►    │
- │      ▼                                                           │        │                          │
- │   sync/: resample 10 Hz ─► band-pass ─► Hilbert phase ─► PLV ─► surrogates                          │
- │   moments/: listener reactions (local only)                       │        │                          │
- └──────────────────────────────────┬────────────────────────────────┘        └────────────┬─────────────┘
-                                    │  offer / answer / ice / leave only                      │
-                                    └────────────────► signaling server ◄─────────────────────┘
-                                                      rooms of 2, stores nothing
+ camera ─► SmartSpectra renderer SDK (on this Mac) ─► metrics: breathing wave, breath stops, rate,
+                                                      pulse, HRV, blinks, talking, expression probabilities
+                                                              │
+ chosen window / video ─► sampled 2×/s (change) and 1×/s (small picture), in memory only
+                                                              │
+ settle (your normal) ─► watch (live cues on the bar) ─► questions ─► analysis/ (pure) ─► report
 ```
 
 ```
-apps/signal          ws signaling: WORD-00 rooms of two, relays only offer/answer/ice/leave,
-                     10 min idle TTL, per-IP join rate limit, reconnect tokens, no payload logging
-packages/shared      zod schemas for the data channel, signaling, recordings and stored sessions
 apps/desktop/src
-  main/              window, CSP, permission handler, SDK IPC, storage, IPC handlers
-  preload/           SmartSpectra's preload bridge + the narrow `window.together` API
+  main/        window, CSP, permissions, SDK IPC, window list (desktopCapturer), cfmedia:// for the picked
+               video (Range requests, only files you chose), compact bar, storage (JSON, 0600), mac.ts (the
+               front app's name via lsappinfo; Do Not Disturb via the person's two Shortcuts)
+  preload/     SmartSpectra's preload bridge + the narrow `window.counterfeed` API
   renderer/src/
-    sensing/         CameraSource (SDK), normalize, quality, lag test, replay/test sources
-    call/            SignalingClient (rejoin on drop), PeerSession (WebRTC, host is the offerer)
-    link/            Peer interface, RemotePeer, ReplayPeer, clock sync, recordings
-    session/         pure state machine + the Session controller + store
-    sync/            resample, filter, FFT/Hilbert phase, PLV, surrogate test, rate
-    moments/         listener-reaction detection
-    ui/              screens and components (no chart or UI libraries: canvas, SVG, CSS)
+    sensing/   CameraSource (SDK), normalize (SDK payload → samples), quality, TestSource (e2e only)
+    content/   ContentCapture: screen change detection and small pictures
+    session/   the flow: setup → settle → watch → questions → report, and every way it can end
+    analysis/  detectors, score, attention curve, words (summary, suggestion, banned words), hooks, focus
+    ui/        screens; charts, waves and icons are hand-made (SVG, canvas)
+packages/shared  zod schemas for stored reports and exports
 ```
 
-### The measurement science
+### What is measured, and how
 
-1. **Align.** Partner timestamps are moved onto the local clock with an NTP-style offset (10 ping/pongs; median of the lowest-RTT third, minus queued outliers). Both traces are resampled to a 10 Hz grid; gaps over 0.5 s stay empty.
-2. **Clean.** Talking stretches (either person, plus 1 s after) are removed, because talking invalidates breathing measurement. Linear detrend, then a zero-phase 0.08–0.67 Hz band-pass (5–40 breaths/min, the SDK's breathing range): 2nd-order Butterworth high- and low-pass run forward and backward.
-3. **Phase.** Analytic signal via FFT Hilbert transform; the FFT buffer is filled by even reflection, and 3 s at each segment edge is trimmed.
-4. **Sync.** Phase-locking value, `|mean e^{i(φA−φB)}|`, over 30 s windows with a 5 s step. A window counts only with ≥ 60 % clean signal from both.
-5. **Chance.** The partner's series is circularly shifted by random offsets ≥ 10 s, 200 times. Windows that straddle the shift's splice point are skipped (otherwise the splice biases chance low and inflates significance; there's a regression test for this). "x× more in step than chance" is claimed only above the 95th percentile with ≥ 100 valid surrogates; otherwise the app says it looks like chance, or that the data was too short to tell.
-6. **Live chance mark.** During Together the meter also shows chance: the same surrogate test over the last 90 s (60 shifts, fixed seed, every 5 s). On Results each bar is grey up to its chance level and coloured only past it, so a high number that is just chance never looks like success.
+- **Your normal.** Each session starts with ~40 s looking at a calm screen. It only counts while the SDK reports a clear view; after 90 s you can continue anyway, and the report then leaves out comparisons with your normal.
+- **Breathing pauses.** The breathing wave stays under 30% of your typical breath size (median 8-second peak-to-peak) for 6 s or more, plus any SDK breath-stop detection of 5 s or more. Read only where the SDK is fully satisfied (chest in view), 2 s after the view returns, and never while you're talking or looking away. A flat stretch over 30 s, or one the SDK marked mostly unstable, is a faded signal and is dropped. If the chest was in view for under half the session (typical for a laptop camera), breathing is **left out** of the report, shown as "not readable", not as zero.
+- **Unbroken stare.** A gap between blinks longer than 2.5× your usual gap (kept between 8 and 20 s). Blinks are rising edges of the SDK's blink detection.
+- **Looked away.** For 1.5 s or more, either the SDK says no face / not facing the screen, or your **head pose** (from the SDK's 478 face landmarks, reduced on arrival to two ratios and never stored) turns more than 0.18 face-widths or tilts down more than 0.10 from *your own* recent pose. The SDK reports one validation code at a time, so "chest not in view" can hide a head turn; head pose catches it anyway. Your normal pose follows posture changes (sitting back is not "looking away"). Light and motion warnings make a stretch *unclear*: excluded, not counted against you. Chest-only warnings keep the face measures.
+- **Expressions.** SmartSpectra's facial-expression probabilities (smile, surprise, frown), smoothed over 0.5 s; a moment needs 55+ and 25 points above your own level over the previous 10 s. People rarely smile when alone, so these are rare by design.
+- **Pull / Hold score (0-100).** Weighted from what was measured, each against your own normal: blinking drop 30%, breathing pauses 25%, longest stare 20%, eyes on screen 15%, time sense 10% (feed only). Missing parts are left out, never guessed; under two parts or under 20 s of watching, there is no score. Every part is shown under *How the score is built*.
+- **Attention curve.** Per bin: share of time facing the screen × (blink suppression, breathing pause, expression). Along the video for a video review, else along your session.
+- **Hook test (per clip).** Hold score = 100 × *stayed* × (0.35 + 0.65 × *engagement*). *Stayed* is the share of the clip you watched before swiping (1 if you watched to the end), so a clip you swiped early can never outrank one you watched. *Engagement*, while it played: facing the screen 20, going longer than your usual blink gap 25, a strong smile or surprise 20 (weights relative; unmeasurable parts are left out, and with none it counts as average). Attention second by second is 0.5 while facing, rising to 1 the longer you go without blinking (a blink resets it), plus 0.25 during a strong expression, 0 while looking away. *Grabbed you*: two seconds in a row at 0.9 or more, or a strong expression. *The first 3 seconds*: landed (grabbed within 3 s), slow start (later), kept you (stayed, nothing stood out), lost you (swiped or looked away within 3 s). Clips play in a shuffled order unless you turn that off, positions follow the video (not the wall clock), and clips that can't play or are under 2 s / over 3 min are flagged before you start. The demo pack (`apps/desktop/resources/demo-pack`) is five procedural clips made by `scripts/make-demo-pack.mjs` with ffmpeg: no stock footage, nothing to license.
+- **Focus session.** *Focused* = your face toward the screen (the same face check and head pose as above). Looking away for under 10 s (thinking, checking notes) still counts as focused; **10 s or more is a break** and ends a stretch; no face for 30 s or more is *left your desk*. Time the camera can't read is left out of both. The front app's name is read from macOS (`lsappinfo`, no permission needed) once a second; Counterfeed's own bar doesn't count as an app, and a stalled reading covers at most 3 s. **Focus score** = eyes on the work 50%, longest stretch without a break (against the session, up to 25 minutes) 20%, staying in one app 15% (1 / (1 + switches per 10 min / 5)), blinking against your normal 15%; parts that couldn't be measured are left out. The bar's count restarts after a break, not after a glance.
+- **Pulse and HRV** are slow (12 s and 60 s windows), so they are shown only for the whole session, never per post.
 
-### Moments (listener reactions)
+### Words
 
-Only while the partner is talking and you are not (both stable). The SDK's facial-expression probabilities for happiness and surprise are smoothed (0.5 s EMA). An event fires when the value rises ≥ 30 points above its rolling 10 s median and peaks ≥ 60, at least 5 s after the previous one. Then the pulse is checked: max stable pulse in the next 15 s minus the median of the previous 15 s ("pulse: not enough signal" otherwise). Example: *"at 04:32 you smiled (84%), pulse +9 BPM"*. Moments are yours; one is sent only if you tap **Share** on it. These are facial-expression probabilities; Together never claims to detect emotion.
+Every sentence about your body comes from `analysis/words.ts`, describes what was measured, and never names a feeling, a brain chemical or a health condition. A banned-word list (stress, anxiety, addiction, dopamine, emotion, diagnosis, …) is checked in unit tests over every generated sentence, and on every screen in the e2e suite.
 
 ---
 
 ## Consent and Data Handling
 
-Before anything turns on, each person ticks every line of a plain list. Nothing is captured or sent until both have agreed.
+**Consent.** Nothing starts until you tick each line on the setup screen: measuring with the camera; keeping small pictures of the window you chose (only when there will be pictures); and that this is wellness information. Every session asks again. The person in front of the camera starts the session; if a second face appears, measuring pauses (the SDK reports it).
 
-**Shared with the other person**
-- Your **video and voice**: live, peer to peer, DTLS-SRTP encrypted. Never recorded or saved by Together.
-- About ten times a second, as numbers: the **height of your breathing wave**, your **pulse** (with confidence) and whether you are **talking**.
-- Only if you choose: the **mood word** you pick, and individual **Moments** you tap Share on (requires "Let me share my reactions", off by default).
+**On this Mac only**
+- Camera frames: analysed by SmartSpectra on this Mac, never stored or sent. The SDK contacts Presage only to validate the API key.
+- Screen: the window you picked is sampled in memory while you watch. Only the small pictures at your report's moments (at most 24) are saved.
 
-**Stays on your laptop**
-- Camera frames: analyzed by SmartSpectra on this laptop, never sent anywhere. The SDK contacts Presage only to validate the API key.
-- Facial-expression probabilities (used for Moments).
-- **Stored** in your profile (`~/Library/Application Support/Together/`): finished sessions (sync results, breathing rates, median pulse, moods, your Moments) and, only if you turned it on, signal recordings (numbers only). Files are user-readable only (0600).
+**Stored** in `~/Library/Application Support/Counterfeed/reports/` (files readable only by you): each report (numbers, short labels, your answers; for a focus session, the names of the apps in front, never what was in them) and its pictures in a separate file.
 
-**Retention and deletion.** Kept until you delete them. **History › Export JSON** writes everything to one file; **Delete all** (History or Settings) removes every session and recording; single sessions and recordings can be deleted individually.
+**Retention and deletion.** Kept until you delete them: one report, or **Delete all** (History or Settings).
 
-**Signaling server.** Sees room codes and connection details (SDP, ICE candidates) for two people at a time, relays them and forgets them. It stores nothing on disk, logs events without payloads, codes or tokens, and drops rooms after 10 idle minutes.
+**Export.** **History › Export** writes your reports as one JSON file: numbers and your answers, **never pictures**. **Open a report file** shows an export read-only; it is never merged into your History.
 
-**Telemetry.** SmartSpectra's aggregate session telemetry is **disabled** (`enableTelemetry: false`). If enabled it would send one summary per session: SDK version, platform/device model, input kind, outcome, frame-rate and throughput counts, validation-state counts and a coarse error code. It would never include video, measured values, identifiers or file paths. Together itself has no analytics, no accounts, and uses **no AI services**.
+**Telemetry.** SmartSpectra's aggregate session telemetry is **disabled** (`enableTelemetry: false`). Counterfeed has no accounts, no analytics, no server, and uses **no AI services** (the SDK's optional LLM Insights are not used).
 
-**Not medical.** Wellness information only, not a medical device; no diagnosis or treatment claims.
+**Not medical.** Wellness information, not a medical measurement. No diagnosis or treatment claims. The Pull score is a description of attention, not a brain chemical or a health measure, and it never compares you with anyone else.
 
 ---
 
 ## Limitations
 
-- **Light and stillness.** Breathing needs a stable camera (laptop on a table), even light without flicker (not a screen as the main light), and the upper chest in view. Large motion can give wrong readings *with high confidence*; the lobby checklist and hints come straight from the SDK's validation status.
-- **Talking invalidates breathing.** Talking stretches are excluded from sync and shown as "this bit won't count".
-- **Warm-up.** Breathing-rate confidence is 0 for the first 30 s and pulse for 12 s; the 2-minute Apart phase doubles as warm-up. Pulse is valid at 40–110 BPM. The SDK is validated at 25+ fps.
-- **One person per camera.**
-- **Short windows.** Two people breathing at similar, steady rates look "in step" over 30 s by accident. That is exactly why every claim is tested against circular-shift surrogates.
-- **Fairness.** Camera-based physiology can perform differently across skin tones and lighting; see Presage's model cards (Settings › About links to them) for the validation populations and limits.
-- **Network.** Some networks need TURN. If the partner drops, timers pause for up to 20 s, then the session ends and keeps partial results.
+- **Sitting still, even light; chest in view for breathing.** Blinks, stares, expressions and looking away need only the face. Breathing pauses need the upper chest in view and a steady camera; with a laptop camera that sees only your face, they're switched off (the settle checklist says so). Large motion can give wrong readings with high confidence.
+- **What real recordings showed** (two guided sessions, replayed in `test/renderer/real-replay.test.ts`): every requested head turn and look down was caught, including ones the SDK's own codes missed. Deliberate 12 s breath holds were found in one session and missed in the other, where the SDK marked the wave unstable or flagged "talking" while nobody spoke; the app stays silent rather than guessing. The SDK's blink detection under-counts (about 6-14 blinks a minute where 15-20 is typical), so "blinked X% less" compares like with like, but absolute rates run low.
+- **iPhone Mirroring is not phone-in-hand.** Posture differs from scrolling on the sofa. iPhone Mirroring needs macOS 15+ and is not available in the EU; any browser tab works instead.
+- **Screen changes are approximate** (a big frame difference); shown as "about".
+- **Expressions are probabilities**, and solo viewers smile little.
+- **Fairness.** Camera-based measurement can perform differently across skin tones and lighting; see Presage's model cards (Settings › About).
 
 ---
 
 ## Testing
 
 ```bash
-npm run check             # eslint + tsc (5 projects) + vitest
-npm run e2e               # builds the app, then drives two real instances end to end
+npm run check             # eslint + tsc + vitest
+npm run e2e               # builds, then drives the real app end to end
 ```
 
-**Unit and integration (vitest, 114 tests).** Assertions are on measured numbers:
-- **Filter.** |H| ≥ 0.97 at 15 br/min; ≤ 0.005 at 0.02 Hz drift; ≤ 0.01 at 2 Hz. Reconstruction error < 5 % with zero lag.
-- **Hilbert.** Error < 0.15 rad from 3 s in, < 0.06 rad from 10 s in.
-- **PLV.**
-  - In-phase sines > 0.95.
-  - Phase-shifted sines stay locked.
-  - Independent band-limited noise < 0.3 (20 seed pairs).
-- **Surrogates.**
-  - Locked pairs rank ≥ 95th percentile.
-  - Independent breathers average 30–70 with ≤ 5/30 false positives.
-  - Same-rate metronomes are *not* called above chance (the splice-bias regression).
-- **Clock.** Offset within 20 ms over 1,000 simulated runs (40 ms latency, 25 ms jitter), and with 20 % of packets hit by 200 ms spikes.
-- **Normalize.** Fixtures go through the SDK's own protobuf codec.
-- **Protocol.** zod rejects malformed and extra-field messages.
-- **Moments.** Synthetic expression curves produce exactly the expected events.
-- **State machine.** Including pause/resume and the 20 s window.
-- **Storage.** Path traversal, export, delete, peer-2 isolation.
-- **Signaling server.** Real WebSockets: relay, room-full, TTL, rate limit, rejoin, no payload logging, 200 concurrent rooms. A taken port rejects within 1 s (it used to hang).
-- **Embedded server.** It starts and creates a real room, shares an existing Together server without closing it, reports a port held by another app, leaves remote URLs alone, and follows URL changes (the old port is released).
-- **Replay loop.** 7 s of playback from a 2 s recording wraps 3 times with strictly rising timestamps and no gap larger than one sample.
+**Unit (vitest).** Head pose from landmarks, looking away against your own posture (turns, looking down, sitting back, gaps, very long runs), where each measure is trusted when the chest is out of view, detectors on synthetic signals (a 10 s flat stretch is one pause; normal breathing and 4 s gaps are none; pauses during talking or out of view are not counted), blink edges and stretches split by looking away, expression moments (a smiley resting face is not a moment), a full report build (feed and video review with a pause excluded), the score at its extremes, the time map, thumbnail choice, banned words over every generated sentence, SDK payload decoding through Presage's own protobuf codec, storage (validation, path tricks, corrupt files, exports without pictures, 0600 files), Range requests for the local video, and the focus session (glances vs breaks, leaving the desk, unreadable time, per-app time and switches with Counterfeed's own bar ignored, the score's parts and words, a full focus report built from a synthetic 5-minute session and checked number by number) plus its macOS side (parsing `lsappinfo`, finding the two shortcuts, and Do Not Disturb on and off through a stand-in Shortcuts tool, including quitting and recovering after a crash).
 
-**End to end (71 checks).** The built app runs as two isolated instances over the real signaling server and a real WebRTC connection. Covered:
-- Consent gate and room codes.
-- Lobby, call video and audio both ways, partner pulse over the data channel, mute.
-- Moods, Apart and Together switching together, results agreeing on both sides, and media stopping at the end.
-- Session length: the host picks Short while the guest keeps Full; both run and store the host's lengths. The live meter shows its chance mark, and the result bars state chance.
-- History, export and Delete All.
-- Peer-2 replay over the network, and Practice with its banner.
-- A partner ending the session, and a partner's process being killed (timer pauses, the session ends at 20 s with partial results).
-- Unknown codes and an unreachable server.
-- Gradients: every gradient fill under white text or icons keeps at least 3:1 contrast at every stop, and the shared gradient really renders. Computed styles are scanned on Home, History, Camera check and Settings.
-- Camera check: wave drawn, Keep as partner unlocks on time, the camera is released on Stop, and Practice against the kept check is labelled as a replay.
-- Leaving early shows no phases as completed.
+**End to end (184 checks).** The built app with a labelled test signal (never the SDK, never synthetic video into the SDK): a feed check start to finish, including the compact always-on-top bar and its live cues; a video review with pause, ratings, and play-from-moment; stopping after 3 s; cancelling during settle (nothing saved); closing the app mid-session (saved, marked ended early); History, export without pictures, opening an export read-only, Delete all; the camera check wave; white-on-gradient contrast in both themes; banned words on every report; and a **laptop-camera run** where the SDK reports "chest not in view" the whole session (your normal still completes without "Continue anyway", head turns and a look down hidden behind that code are caught live and in the report, and breathing is shown as not readable, never as pauses); and a **hook test** start to finish (the demo pack loads and every clip is checked; a broken file and a 1-second clip are flagged and never played; the 6-clip limit and no duplicates; clips play inside the app with names hidden; a clip that ends moves on by itself; ↓ swipes, and a second swipe straight after is ignored; the 9:16 player never covers its side panel; "which one would you post?" with a still of every clip seen; the ranking puts the clip with the stare and the smile first and the swiped clip last, below every clip watched to the end; your pick next to what held you; second-by-second rows with the swipe marked; play from any clip; reopening from History with its stills but no player; indigo contrast in both themes); and a **focus session** start to finish (the Shortcuts setup when they don't exist; with a stand-in Shortcuts tool, Do Not Disturb on as the session starts and off on every way out: time up, stop during settle, stop on the bar, quitting; the countdown bar; the focused count restarts after a 13 s look down but not after a 2.5 s glance; one break on the map, Code first among the apps, about 8 switches; how it felt next to what was measured; History; plum contrast in both themes). Screenshots go to `apps/desktop/e2e/artifacts/` (git-ignored).
 
-In this mode sensing uses a labelled test signal (no SDK) and the call uses Chromium's fake camera and mic.
-
-**Measured performance (Apple Silicon, during Together with video both ways and two live waves):**
-
-| | Value |
-| --- | --- |
-| Renderer CPU | ~2 % |
-| Whole app CPU (all processes) | ~4.5 % |
-| Renderer JS heap | 12–18 MB |
-| Frame pacing | 16.7 ms mean, 17.3 ms p95, 0 long tasks |
-| Idle CPU | ~1.4 % |
-| Idle memory over a bare Electron window | ~+100 MB |
-
-The SDK itself (frame capture and processing at 720p30) adds load on a live camera that the e2e suite can't measure; check the Camera check on your machine.
-
-**Camera check › Technical details** shows raw SDK values, confidence, sample rates, measurement delay, and a **lag test**: a tone plays, you breathe in, and it reports the median delay over five tries until the wave moves.
+**Real camera (manual, uses credits).** `npm run build && node e2e/real.mjs` runs the real SDK with a prompter window that asks the person at the Mac to breathe normally, hold their breath, stare, smile, turn their head, look down, and sit back, then compares the report with what was asked. It stops on its own if no face appears within 20 s. The raw session is saved to `apps/desktop/e2e/artifacts/real/` (git-ignored: it holds your body signals) and can be replayed by the unit tests.
 
 ---
 
 ## Demo script (3 minutes)
 
-1. **Home.** "Each laptop measures only its own person." Start a room; show the consent list: every line is a promise.
-2. **Waiting.** Copy the `TIDE-42`-style code; the partner joins.
-3. **Lobby.** Point at the checklist (light, framing, stillness) and the heart settling to a steady reading.
-4. **Call.** Talk for a minute. Open Moments: a smile while they talk shows up privately, with what your pulse did next.
-5. **Apart.** Only your wave; theirs is hidden.
-6. **Together.** Both waves overlaid; the meter climbs as you settle into a shared rhythm.
-7. **Results.** Apart vs Together against chance, the minute-by-minute line, moods before and after. Everything is saved on this laptop: show History › Export, then Delete all.
+1. **Home.** "Your feed measures you. Measure it back." Four doors.
+2. **Camera check.** Hold your breath: the wave goes flat. That's what gets counted.
+3. **Feed check** on iPhone Mirroring, 2 min. The bar shrinks to the corner; scroll Reels; the bar says *Breathing paused · 9 s* while it happens.
+4. **Report.** Pull score, one sentence, the Reel that was on screen at each pause, *You guessed 1 min. It was 2*, one thing to try. Open *How the score is built*.
+5. **Review a project** with another entry's demo video. *Where it lost you* → click → the video plays from that moment.
+6. **Test your hooks** › demo pack. Swipe *Test card* after a second. Pick *Color drift* as the one you'd post. The report: the winner, *Lost you in the first 3 s* on the one you swiped, and *You'd post "Color drift". Your body stayed with "Fractal dive".*
+7. **Focus on one thing**, 2 min, Do Not Disturb on. Work in your editor, check Slack once, look down at your phone. The bar counts *Focused · 0:48*, then *Looking away · 12 s*. The report: *Steady focus*, the break on the map, Code first in *Where your focus went*, and *It felt focused. The camera measured 81% focused.*
+8. **History › Export**, then **Delete all**.
 
 ---
 
 ## Credits
 
 - Measurement: **Presage SmartSpectra SDK** (`@smartspectra/node-sdk`). Electron wiring follows Presage's [electron-quickstart](https://github.com/Presage-Security/SmartSpectra/tree/main/nodejs/samples/electron-quickstart) sample: preload bridge, permission handler, `worker-src blob:` CSP, packaged native-runtime path and entitlements.
-- STUN: `stun.l.google.com`.
-- Built with Electron, electron-vite, React, Tailwind CSS, zustand, ws, zod and vitest. Charts, waves and icons are hand-made (canvas and SVG).
+- Research the design leans on: Nakano et al. 2009 (viewers hold blinks at moments that matter), Fridlund 1991 (people smile little when alone), Linda Stone's "email apnea" (breath holding at screens).
+- Built with Electron, electron-vite, React, Tailwind CSS, zustand, zod and vitest.

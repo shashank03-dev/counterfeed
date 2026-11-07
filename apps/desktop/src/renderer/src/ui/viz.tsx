@@ -1,84 +1,82 @@
-import { useEffect, useId, useRef, type CSSProperties, type ReactNode } from 'react';
-import { Session, type Buffers } from '../session/controller';
-
-/** Where a wave reads its samples from: the live session by default, or a Diagnostics probe. */
-export interface WaveFeed {
-  you: Buffers;
-  partner: Buffers | null;
-  window(): { now: number; offsetUs: number };
-}
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { ReportEvent, Thumbs } from '@counterfeed/shared';
+import { smooth } from '../analysis/curve';
+import { session } from '../session/controller';
+import type { TraceSample } from '../sensing/normalize';
 import { Icon } from './icons';
 import { cx } from './kit';
+import { EVENT_META, clock } from './format';
 
 /* ------------------------------------------------------------------ brand */
 
-/** Two overlapping lights that breathe: you and them, one shared middle. */
+/**
+ * Two discs that overlap: you (tomato) and what you watch (jade). Each is lit within its own hue; the front disc
+ * is cut out with a ring of the surface colour, like overlapping avatars, so the hues never mix. The ring matches
+ * the panel unless the parent sets `--mark-ring` to the colour it sits on.
+ */
 export function BrandMark({ size = 28, still }: { size?: number; still?: boolean }) {
-  const r = size * 0.34;
+  const r = size * 0.3;
+  const dot = (side: -1 | 1, hi: string, mid: string, lo: string, ring: boolean) => (
+    <span
+      className="absolute top-1/2 left-1/2 rounded-full"
+      style={{
+        width: r * 2,
+        height: r * 2,
+        marginLeft: -r,
+        marginTop: -r,
+        background: `radial-gradient(circle at 35% 28%, ${hi}, ${mid} 58%, ${lo})`,
+        boxShadow: ring ? `0 0 0 ${Math.max(1.5, size * 0.06)}px var(--mark-ring, var(--panel))` : undefined,
+        ['--dx' as string]: `${side * size * 0.19}px`,
+        transform: `translateX(${side * size * 0.19}px)`,
+      }}
+    />
+  );
   return (
     <span className={cx('relative isolate inline-block shrink-0', !still && 'breathe')} style={{ width: size, height: size }} aria-hidden>
-      <span className="brand-dot absolute top-1/2 left-1/2 rounded-full" style={{ width: r * 2, height: r * 2, marginLeft: -r, marginTop: -r, background: 'radial-gradient(circle at 32% 30% in oklch, var(--you-hi), var(--you) 55%, var(--you-lo))', ['--dx' as string]: `${-size * 0.17}px`, transform: `translateX(${-size * 0.17}px)` }} />
-      <span className="brand-dot absolute top-1/2 left-1/2 rounded-full" style={{ width: r * 2, height: r * 2, marginLeft: -r, marginTop: -r, background: 'radial-gradient(circle at 68% 30% in oklch, var(--them-hi), var(--them) 55%, var(--them-lo))', ['--dx' as string]: `${size * 0.17}px`, transform: `translateX(${size * 0.17}px)` }} />
+      {dot(1, 'var(--feed-hi)', 'var(--feed)', 'var(--feed-lo)', false)}
+      {dot(-1, 'var(--you-hi)', 'var(--you)', 'var(--you-lo)', true)}
     </span>
   );
 }
 
-/* ------------------------------------------------------------------ heart */
-
-/** A heart that beats at the measured rate. Unsteady readings dim it and stop the beat (no fake rhythm). */
-export function Heart({ bpm, stable, who, size = 'md', label, testId, onMedia }: { bpm: number | null; stable: boolean; who: 'you' | 'them'; size?: 'sm' | 'md' | 'lg'; label?: string; testId?: string; onMedia?: boolean }) {
-  const live = bpm !== null && bpm >= 40 && bpm <= 110 && stable;
-  const px = size === 'lg' ? 26 : size === 'md' ? 18 : 14;
+/** One hue, highlight step to solid step (the score ring and progress). Never a multi-hue ramp. */
+export function AccentGradient({ id, vertical, rotate }: { id: string; vertical?: boolean; rotate?: number }) {
   return (
-    <span data-testid={testId} className="inline-flex items-center gap-1.5" aria-label={label ? `${label}: ${live ? `${Math.round(bpm!)} beats per minute` : 'pulse settling'}` : undefined}>
-      <span className={cx('inline-grid place-items-center transition-opacity duration-500', live ? 'beat opacity-100' : 'opacity-35')} style={{ ['--beat' as string]: live ? `${60 / bpm!}s` : undefined, color: `var(--${who})` } as CSSProperties}>
-        <Icon.Heart size={px} />
-      </span>
-      <span className={cx('tnum font-medium', size === 'lg' ? 'text-[22px] tracking-[-0.02em]' : size === 'md' ? 'text-[14px]' : 'text-[12px]', onMedia ? (live ? 'text-white' : 'text-white/60') : live ? 'text-fg' : 'text-fg-dim')}>
-        {bpm !== null && bpm > 0 ? Math.round(bpm) : '–'}
-        <span className={cx('ml-0.5 font-normal', onMedia ? 'text-white/60' : 'text-fg-dim', size === 'lg' ? 'text-[12px]' : 'text-[10.5px]')}>bpm</span>
-      </span>
-    </span>
+    <linearGradient id={id} x1="0" y1="0" x2={vertical ? '0' : '1'} y2={vertical ? '1' : '0'} gradientTransform={rotate ? `rotate(${rotate} 0.5 0.5)` : undefined}>
+      <stop offset="0" stopColor="var(--meter-1)" />
+      <stop offset="1" stopColor="var(--meter-2)" />
+    </linearGradient>
   );
-}
-
-/* ------------------------------------------------------------------ live breathing wave (canvas) */
-
-interface Lane {
-  who: 'you' | 'them';
-  scale: number;
 }
 
 function readColor(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#999';
 }
 
-/**
- * Live breathing wave(s). Reads the session's sample buffers directly every animation frame, so the 30 Hz
- * stream never touches React. Display-only processing: a running-mean detrend and a robust, slowly adapting
- * scale so the wave sits calmly in its lane. Pauses when hidden or off screen.
- */
-export function Waves({ show, seconds = 20, className, testId, feed }: { show: ('you' | 'them')[]; seconds?: number; className?: string; testId?: string; feed?: () => WaveFeed | null }) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const lanes = useRef<Lane[]>([]);
-  const key = show.join(',');
-  useEffect(() => {
-    lanes.current = show.map((who) => ({ who, scale: 0 }));
-  }, [key, show]);
+/* ------------------------------------------------------------------ live breathing wave */
 
+/**
+ * Your breathing wave, live. Reads the session's buffer every animation frame (never through React). Display-only
+ * processing: a running-mean detrend and a slowly adapting scale so the wave sits calmly. A breathing pause shows
+ * as the line going flat, which is exactly what the report counts.
+ */
+export function LiveWave({ seconds = 14, className, testId, source }: { seconds?: number; className?: string; testId?: string; source?: () => readonly TraceSample[] }) {
+  const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const el = canvas.current;
+    const el = ref.current;
     if (!el) return;
-    const ctx = el.getContext('2d', { alpha: true })!;
+    const ctx = el.getContext('2d')!;
     let raf = 0;
-    let visible = true;
     let w = 0;
     let h = 0;
-    let colors = { you: readColor('--you'), them: readColor('--them'), line: readColor('--line'), dark: !document.documentElement.dataset.theme?.includes('light') };
-    const recolor = () => (colors = { you: readColor('--you'), them: readColor('--them'), line: readColor('--line'), dark: document.documentElement.dataset.theme !== 'light' });
-    const mo = new MutationObserver(recolor);
+    let scale = 0;
+    let color = readColor('--you');
+    let line = readColor('--line-strong');
+    const mo = new MutationObserver(() => {
+      color = readColor('--you');
+      line = readColor('--line-strong');
+    });
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-
     const resize = () => {
       const r = el.getBoundingClientRect();
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -91,21 +89,9 @@ export function Waves({ show, seconds = 20, className, testId, feed }: { show: (
     const ro = new ResizeObserver(resize);
     ro.observe(el);
     resize();
-    const io = new IntersectionObserver(([e]) => {
-      visible = !!e?.isIntersecting;
-      if (visible) loop();
-    });
-    io.observe(el);
-
-    const xs: number[] = [];
-    const ys: number[] = [];
-    let last = 0;
-
     const draw = () => {
       ctx.clearRect(0, 0, w, h);
-      const s: WaveFeed | null = feed ? feed() : Session.current;
-      // Baseline.
-      ctx.strokeStyle = colors.line;
+      ctx.strokeStyle = line;
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 5]);
       ctx.beginPath();
@@ -113,293 +99,335 @@ export function Waves({ show, seconds = 20, className, testId, feed }: { show: (
       ctx.lineTo(w, h / 2);
       ctx.stroke();
       ctx.setLineDash([]);
-      if (!s) return;
-      const win = s.window();
-      const end = win.now - 350_000; // a little behind real time so batched arrivals draw smoothly
-      const from = end - seconds * 1e6;
-      ctx.globalCompositeOperation = colors.dark ? 'lighter' : 'source-over';
-      for (const lane of lanes.current) {
-        const buf = lane.who === 'you' ? s.you : s.partner;
-        if (!buf) continue;
-        const off = lane.who === 'you' ? 0 : win.offsetUs;
-        const series = buf.trace;
-        const k0 = Math.max(0, series.lowerBound(from - 8e6 + off));
-        const n = series.length;
-        if (n - k0 < 4) continue;
-        // Running mean over ~6 s for display detrend (prefix sums over the visible range).
-        xs.length = 0;
-        ys.length = 0;
+      const buf = source ? source() : session.liveTrace();
+      if (buf.length > 8) {
+        const end = buf[buf.length - 1]!.t;
+        const from = end - seconds * 1e6;
+        const pts = buf.filter((s) => s.t >= from - 4e6);
+        // Running mean over ~5 s as the display baseline.
+        const mean: number[] = [];
+        let j = 0;
         let sum = 0;
-        const q: number[] = [];
-        const qt: number[] = [];
-        let qi = 0;
-        const vals: number[] = [];
-        for (let k = k0; k < n; k++) {
-          const t = series.tAt(k) - off;
-          const v = series.vAt(k);
-          q.push(v);
-          qt.push(t);
-          sum += v;
-          while (qt[qi]! < t - 6e6) sum -= q[qi++]!;
-          if (t < from || t > end) continue;
-          const d = v - sum / (q.length - qi);
-          xs.push(((t - from) / (end - from)) * w);
-          ys.push(d);
-          vals.push(d);
+        for (let i = 0; i < pts.length; i++) {
+          sum += pts[i]!.v;
+          while (pts[i]!.t - pts[j]!.t > 5e6) sum -= pts[j++]!.v;
+          mean.push(sum / (i - j + 1));
         }
-        if (xs.length < 2) continue;
-        // Display-only smoothing (~120 ms EMA at ~30 Hz): removes pixel jitter, keeps every breath's shape.
-        for (let i = 1; i < ys.length; i++) ys[i] = ys[i - 1]! + 0.25 * (ys[i]! - ys[i - 1]!);
-        vals.sort((a, b) => a - b);
-        const lo = vals[Math.floor(vals.length * 0.05)]!;
-        const hi = vals[Math.floor(vals.length * 0.95)]!;
-        const target = Math.max(1e-9, (hi - lo) / 2);
-        lane.scale = lane.scale ? lane.scale + (target - lane.scale) * 0.03 : target;
-        const amp = (h / 2) * (show.length > 1 ? 0.62 : 0.7);
-        const color = lane.who === 'you' ? colors.you : colors.them;
-        const yAt = (i: number) => h / 2 - Math.max(-1.4, Math.min(1.4, ys[i]! / lane.scale)) * amp;
-
-        // Area wash that fades toward the midline (single wave only: two overlapping washes turn muddy).
-        if (show.length === 1) {
-          const wash = ctx.createLinearGradient(0, 0, 0, h);
-          wash.addColorStop(0, color + '40');
-          wash.addColorStop(0.5, color + '00');
-          wash.addColorStop(1, color + '40');
-          ctx.beginPath();
-          ctx.moveTo(xs[0]!, h / 2);
-          for (let i = 0; i < xs.length; i++) ctx.lineTo(xs[i]!, yAt(i));
-          ctx.lineTo(xs[xs.length - 1]!, h / 2);
-          ctx.closePath();
-          ctx.fillStyle = wash;
-          ctx.fill();
-        }
-
-        // Smoothed line: quadratic curves through midpoints.
-        const path = new Path2D();
-        path.moveTo(xs[0]!, yAt(0));
-        for (let i = 1; i < xs.length - 1; i++) {
-          const mx = (xs[i]! + xs[i + 1]!) / 2;
-          const my = (yAt(i) + yAt(i + 1)) / 2;
-          path.quadraticCurveTo(xs[i]!, yAt(i), mx, my);
-        }
-        path.lineTo(xs[xs.length - 1]!, yAt(xs.length - 1));
-        ctx.lineJoin = 'round';
-        ctx.lineCap = 'round';
+        let peak = 0;
+        for (let i = 0; i < pts.length; i++) if (pts[i]!.t >= from) peak = Math.max(peak, Math.abs(pts[i]!.v - mean[i]!));
+        scale = scale ? scale + 0.04 * (Math.max(peak, 1e-6) - scale) : Math.max(peak, 1e-6);
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2.25;
-        ctx.stroke(path);
-
-        // Leading point.
-        const lx = xs[xs.length - 1]!;
-        const ly = yAt(xs.length - 1);
-        ctx.fillStyle = color;
+        ctx.lineWidth = 2;
+        ctx.lineJoin = 'round';
         ctx.beginPath();
-        ctx.arc(lx, ly, 3.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalCompositeOperation = 'source-over';
-      // Fade the oldest seconds into the background.
-      ctx.globalCompositeOperation = 'destination-out';
-      const fade = ctx.createLinearGradient(0, 0, w * 0.18, 0);
-      fade.addColorStop(0, 'rgba(0,0,0,1)');
-      fade.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = fade;
-      ctx.fillRect(0, 0, w * 0.18, h);
-      ctx.globalCompositeOperation = 'source-over';
-    };
-
-    const loop = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame((ts) => {
-        if (!visible || document.hidden) return;
-        // Cap at ~45 fps: smooth to the eye, gentle on battery.
-        if (ts - last >= 21) {
-          last = ts;
-          draw();
+        let started = false;
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i]!;
+          if (p.t < from) continue;
+          const x = ((p.t - from) / (seconds * 1e6)) * w;
+          const y = h / 2 - ((p.v - mean[i]!) / scale) * (h * 0.38);
+          if (!started) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+          started = true;
         }
-        loop();
-      });
+        ctx.stroke();
+      }
+      raf = requestAnimationFrame(draw);
     };
-    const onVis = () => !document.hidden && loop();
-    document.addEventListener('visibilitychange', onVis);
-    loop();
+    raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      io.disconnect();
       mo.disconnect();
-      document.removeEventListener('visibilitychange', onVis);
     };
-  }, [key, seconds, show.length, feed]);
-
-  return <canvas ref={canvas} data-testid={testId} className={cx('block h-full w-full', className)} aria-label={show.length > 1 ? 'Both breathing waves' : 'Your breathing wave'} role="img" />;
+  }, [seconds, source]);
+  return <canvas ref={ref} data-testid={testId} className={cx('block h-full w-full', className)} role="img" aria-label="Your breathing wave, live" />;
 }
 
-/* ------------------------------------------------------------------ sync meter */
+/* ------------------------------------------------------------------ rings */
 
-/** How in step the two of you are right now (PLV over the last 30 s), as an arc. */
-export function SyncMeter({ value, chance = null, size = 168, testId }: { value: number | null; chance?: number | null; size?: number; testId?: string }) {
-  const r = size / 2 - 10;
+/** The Pull / Hold score as a 300° arc, one hue from its highlight step to its solid step. */
+export function ScoreRing({ value, label, size = 176, testId }: { value: number | null; label: string; size?: number; testId?: string }) {
+  const r = size / 2 - 11;
   const c = 2 * Math.PI * r;
-  const arc = c * (240 / 360);
-  const v = value === null ? 0 : Math.max(0, Math.min(1, value));
+  const arc = c * (300 / 360);
+  const v = value === null ? 0 : Math.max(0, Math.min(100, value)) / 100;
   const id = useId();
-  // The chance mark sits on the arc (svg frame: the arc starts at 0° and runs 240° clockwise).
-  const ch = chance === null ? null : Math.max(0, Math.min(1, chance));
-  const a = ch === null ? 0 : (ch * 240 * Math.PI) / 180;
-  const at = (rad: number) => ({ x: size / 2 + rad * Math.cos(a), y: size / 2 + rad * Math.sin(a) });
-  const t0 = at(r - 9);
-  const t1 = at(r + 9);
   return (
-    <div data-testid={testId} className="relative grid place-items-center" style={{ width: size, height: size * 0.86 }} role="meter" aria-label="In step" aria-valuemin={0} aria-valuemax={100} aria-valuenow={value === null ? undefined : Math.round(v * 100)}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="absolute top-0" style={{ transform: 'rotate(150deg)' }}>
+    <div data-testid={testId} className="relative grid shrink-0 place-items-center" style={{ width: size, height: size }} role="meter" aria-label={`${label} score`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={value ?? undefined}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="absolute inset-0" style={{ transform: 'rotate(120deg)' }}>
         <defs>
-          {/* The svg is turned 150°; turn the gradient back so it runs left to right along the arc on screen. */}
-          <DuoGradient id={id} rotate={-150} />
+          <AccentGradient id={id} rotate={-120} />
         </defs>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--line-strong)" strokeWidth={8} strokeLinecap="round" strokeDasharray={`${arc} ${c}`} />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          fill="none"
-          stroke={`url(#${CSS.escape(id)})`}
-          strokeWidth={8}
-          strokeLinecap="round"
-          strokeDasharray={`${arc * v} ${c}`}
-          style={{ transition: 'stroke-dasharray 900ms var(--ease)' }}
-        />
-        {ch !== null && (
-          <g data-testid={testId ? `${testId}-chance` : undefined} style={{ transition: 'opacity 400ms' }}>
-            <line x1={t0.x} y1={t0.y} x2={t1.x} y2={t1.y} stroke="var(--surface)" strokeWidth={6} strokeLinecap="round" />
-            <line x1={t0.x} y1={t0.y} x2={t1.x} y2={t1.y} stroke="var(--fg)" strokeWidth={2.5} strokeLinecap="round" />
-          </g>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--line-strong)" strokeWidth={10} strokeLinecap="round" strokeDasharray={`${arc} ${c}`} />
+        {value !== null && (
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={`url(#${CSS.escape(id)})`} strokeWidth={10} strokeLinecap="round" strokeDasharray={`${Math.max(0.001, arc * v)} ${c}`} className="ring-in" style={{ ['--arc' as string]: `${arc * v}` }} />
         )}
       </svg>
-      <div className="relative mt-3 text-center">
-        <div className="tnum font-display text-[40px] leading-none font-semibold tracking-[-0.04em] text-fg">{value === null ? '–' : Math.round(v * 100)}</div>
-        <div className="mt-1.5 text-[11px] font-medium tracking-[0.08em] text-fg-dim uppercase">{value === null ? 'Listening' : 'In step'}</div>
-        {ch !== null && value !== null && (
-          <div className="tnum mt-1 text-[11px] text-fg-muted" data-testid={testId ? `${testId}-chance-value` : undefined}>
-            chance {Math.round(ch * 100)}
-          </div>
-        )}
+      <div className="relative text-center">
+        <div className="tnum font-display text-[52px] leading-none font-semibold tracking-[-0.045em] text-fg">{value === null ? '–' : value}</div>
+        <div className="mt-1.5 text-[11px] font-semibold tracking-[0.1em] text-fg-dim uppercase">{label}</div>
       </div>
     </div>
   );
 }
 
-/**
- * The shared "dusk" gradient as SVG stops. SVG interpolates in sRGB, so four close stops (the same ones the
- * CSS gradient uses in OKLCH) keep every segment short enough to stay clean.
- */
-export function DuoGradient({ id, vertical, rotate }: { id: string; vertical?: boolean; rotate?: number }) {
-  return (
-    <linearGradient id={id} x1="0" y1="0" x2={vertical ? '0' : '1'} y2={vertical ? '1' : '0'} gradientTransform={rotate ? `rotate(${rotate} 0.5 0.5)` : undefined}>
-      <stop offset="0" stopColor="var(--duo-1)" />
-      <stop offset="0.35" stopColor="var(--duo-2)" />
-      <stop offset="0.65" stopColor="var(--duo-3)" />
-      <stop offset="1" stopColor="var(--duo-4)" />
-    </linearGradient>
-  );
-}
-
-/* ------------------------------------------------------------------ countdown ring */
-
-export function CountdownRing({ remainingMs, totalMs, size = 64, who = 'you', children }: { remainingMs: number; totalMs: number; size?: number; who?: 'you' | 'them' | 'duo'; children?: ReactNode }) {
-  const r = size / 2 - 3;
+/** Settle progress: fills while the camera has a clear view. */
+export function ProgressRing({ progress, size = 112, children }: { progress: number; size?: number; children?: ReactNode }) {
+  const r = size / 2 - 5;
   const c = 2 * Math.PI * r;
-  const frac = totalMs ? Math.max(0, Math.min(1, remainingMs / totalMs)) : 0;
-  const s = Math.ceil(remainingMs / 1000);
   const id = useId();
-  const stroke = who === 'duo' ? `url(#${CSS.escape(id)})` : `var(--${who})`;
   return (
-    <div className="relative grid place-items-center" style={{ width: size, height: size }} role="timer" aria-label={`${Math.floor(s / 60)} minutes ${s % 60} seconds left`}>
+    <div className="relative grid place-items-center" style={{ width: size, height: size }} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
       <svg width={size} height={size} className="absolute inset-0 -rotate-90">
-        {who === 'duo' && (
-          <defs>
-            <DuoGradient id={id} vertical />
-          </defs>
-        )}
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--line)" strokeWidth={2.5} />
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={stroke} strokeWidth={2.5} strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - frac)} style={{ transition: 'stroke-dashoffset 300ms linear' }} />
+        <defs>
+          <AccentGradient id={id} vertical />
+        </defs>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--line-strong)" strokeWidth={4} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={`url(#${CSS.escape(id)})`} strokeWidth={4} strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - Math.max(0, Math.min(1, progress)))} style={{ transition: 'stroke-dashoffset 300ms linear' }} />
       </svg>
-      {children ?? (
-        <span className="tnum text-[13px] font-medium text-fg">
-          {Math.floor(s / 60)}:{String(s % 60).padStart(2, '0')}
-        </span>
-      )}
+      {children}
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ small charts */
+/* ------------------------------------------------------------------ camera preview */
 
-export function Sparkline({ values, width = 120, height = 28, className }: { values: number[]; width?: number; height?: number; className?: string }) {
-  const id = useId();
-  if (values.length < 2) return <div style={{ width, height }} className={className} />;
-  const pts = values.map((v, i) => `${((i / (values.length - 1)) * (width - 2) + 1).toFixed(1)},${(height - 2 - Math.max(0, Math.min(1, v)) * (height - 4)).toFixed(1)}`);
-  return (
-    <svg width={width} height={height} className={className} aria-hidden>
-      <defs>
-        <DuoGradient id={id} />
-      </defs>
-      <polyline points={pts.join(' ')} fill="none" stroke={`url(#${CSS.escape(id)})`} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** Apart vs Together, each against its own chance level. */
-export function CompareBars({ rows }: { rows: { label: string; value: number | null; chance: number | null; hint?: string; testId?: string }[] }) {
-  return (
-    <div className="grid gap-4">
-      {rows.map((r) => (
-        <div key={r.label} data-testid={r.testId}>
-          <div className="mb-1.5 flex items-baseline justify-between">
-            <span className="text-[12.5px] font-medium text-fg">{r.label}</span>
-            <span className="tnum text-[12.5px] text-fg-muted">
-              {r.value === null ? 'not enough signal' : `${Math.round(r.value * 100)} in step`}
-              {r.value !== null && r.chance !== null && <span className="text-fg-dim"> · chance {Math.round(r.chance * 100)}</span>}
-            </span>
-          </div>
-          {/* Grey up to chance (what two people breathing at these paces get by accident), colour only past it. */}
-          <div className="relative h-2.5 overflow-hidden rounded-full bg-fg/[0.07]">
-            {r.value !== null && <div className="absolute inset-y-0 left-0 rounded-full bg-g-duo transition-[width] duration-700 ease-soft" style={{ width: `${Math.max(2, r.value * 100)}%` }} />}
-            {r.value !== null && r.chance !== null && (
-              <div
-                className="absolute inset-y-0 left-0 rounded-l-full bg-[color-mix(in_oklch,var(--fg)_16%,var(--surface))] transition-[width] duration-700 ease-soft"
-                style={{ width: `${Math.min(r.value, r.chance) * 100}%`, borderRadius: r.value <= r.chance ? '9999px' : undefined }}
-                data-chance-fill
-              />
-            )}
-            {r.chance !== null && <div className="absolute inset-y-0 w-[2px] bg-fg-muted" style={{ left: `calc(${r.chance * 100}% - 1px)` }} title="Chance level" />}
-          </div>
-          {r.hint && <div className="mt-1 text-[11.5px] text-fg-dim">{r.hint}</div>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ video */
-
-export function VideoTile({ stream, mirrored, muted = true, className, children, placeholder, testId }: { stream: MediaStream | null; mirrored?: boolean; muted?: boolean; className?: string; children?: ReactNode; placeholder?: ReactNode; testId?: string }) {
+/** The camera, only to help you frame yourself. Mirrored like a mirror. */
+export function CameraPreview({ stream, className, children }: { stream: MediaStream | null; className?: string; children?: ReactNode }) {
   const ref = useRef<HTMLVideoElement>(null);
-  const hasVideo = !!stream && stream.getVideoTracks().some((t) => t.readyState === 'live');
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
     if (v.srcObject !== stream) v.srcObject = stream;
-    // Electron doesn't always honour autoplay when srcObject changes after load.
     if (stream) void v.play().catch(() => {});
   }, [stream]);
   return (
-    // Position comes from the caller when given (absolute/fixed); otherwise relative. Never both: conflicting
-    // utilities resolve by stylesheet order, not class order.
-    <div data-testid={testId} className={cx(/\b(absolute|fixed)\b/.test(className ?? '') ? '' : 'relative', 'isolate overflow-hidden bg-surface-2 bg-[radial-gradient(120%_100%_at_50%_0%,var(--surface-3),transparent_70%)]', className)}>
-      <video ref={ref} autoPlay playsInline muted={muted} disablePictureInPicture className={cx('absolute inset-0 h-full w-full object-cover transition-opacity duration-500', mirrored && '-scale-x-100', hasVideo ? 'opacity-100' : 'opacity-0')} />
-      {!hasVideo && placeholder && <div className="absolute inset-0 grid place-items-center">{placeholder}</div>}
+    <div className={cx('relative overflow-hidden bg-surface-3', className)}>
+      {stream ? <video ref={ref} muted playsInline className="h-full w-full scale-x-[-1] object-cover" /> : !children && <div className="grid h-full w-full place-items-center text-fg-dim"><Icon.Video size={22} /></div>}
       {children}
     </div>
   );
+}
+
+/* ------------------------------------------------------------------ attention timeline */
+
+export function useWidth<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [w, setW] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setW(Math.round(e!.contentRect.width)));
+    ro.observe(el);
+    setW(Math.round(el.getBoundingClientRect().width));
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w] as const;
+}
+
+export function niceTicks(spanMs: number): number[] {
+  const steps = [10, 15, 30, 60, 120, 300, 600, 900, 1800].map((s) => s * 1000);
+  const step = steps.find((s) => spanMs / s <= 7) ?? 3_600_000;
+  const out: number[] = [];
+  for (let t = 0; t <= spanMs; t += step) out.push(t);
+  return out;
+}
+
+export interface TimelineEvent extends ReportEvent {
+  x: number;
+}
+
+/**
+ * Attention over time (one series: no legend box, the title names it), with the moments on a lane below and
+ * "looked away" as hatched bands behind. Crosshair tooltip on the curve; each moment has its own tooltip and is
+ * clickable. Text stays in text colours; colour only marks identity, always with an icon in the legend.
+ */
+export function AttentionTimeline({
+  curve,
+  binMs,
+  spanMs,
+  events,
+  thumbs,
+  selected,
+  onSelect,
+  testId,
+}: {
+  curve: (number | null)[];
+  binMs: number;
+  spanMs: number;
+  events: TimelineEvent[];
+  thumbs: Thumbs;
+  selected: string | null;
+  onSelect: (id: string) => void;
+  testId?: string;
+}) {
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<{ x: number; kind: 'curve' | 'event'; id?: string } | null>(null);
+  const gid = useId();
+  const H = 132;
+  const LANE = 30;
+  const PAD_L = 34;
+  const PAD_R = 8;
+  const plotW = Math.max(10, width - PAD_L - PAD_R);
+  const sx = (ms: number) => PAD_L + (Math.min(spanMs, Math.max(0, ms)) / Math.max(1, spanMs)) * plotW;
+  const sy = (v: number) => 8 + (1 - v) * (H - 16);
+  const sm = useMemo(() => smooth(curve), [curve]);
+
+  // Area path, broken where there was no signal.
+  const paths = useMemo(() => {
+    const segs: { x: number; y: number }[][] = [];
+    let cur: { x: number; y: number }[] = [];
+    sm.forEach((v, i) => {
+      if (v === null) {
+        if (cur.length) segs.push(cur);
+        cur = [];
+        return;
+      }
+      cur.push({ x: sx((i + 0.5) * binMs), y: sy(v) });
+    });
+    if (cur.length) segs.push(cur);
+    return segs.map((p) => {
+      const pts = p.length === 1 ? [{ x: p[0]!.x - 3, y: p[0]!.y }, { x: p[0]!.x + 3, y: p[0]!.y }] : p;
+      const line = pts.map((q, i) => `${i ? 'L' : 'M'}${q.x.toFixed(1)},${q.y.toFixed(1)}`).join('');
+      const area = `${line}L${pts[pts.length - 1]!.x.toFixed(1)},${sy(0)}L${pts[0]!.x.toFixed(1)},${sy(0)}Z`;
+      return { line, area };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sm, binMs, spanMs, plotW]);
+
+  const away = events.filter((e) => e.kind === 'away');
+  const marks = events.filter((e) => e.kind !== 'away');
+  const hoverEvent = hover?.kind === 'event' ? events.find((e) => e.id === hover.id) : null;
+  const hoverBin = hover?.kind === 'curve' ? Math.min(sm.length - 1, Math.max(0, Math.floor((((hover.x - PAD_L) / plotW) * spanMs) / binMs))) : null;
+  const ticks = niceTicks(spanMs);
+
+  return (
+    <div ref={ref} data-testid={testId} className="relative w-full select-none">
+      {width > 0 && (
+        <svg width={width} height={H + LANE + 22} className="block overflow-visible" role="img" aria-label="Attention over time, with moments">
+          <defs>
+            <linearGradient id={`${gid}-a`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="var(--fg)" stopOpacity="0.14" />
+              <stop offset="1" stopColor="var(--fg)" stopOpacity="0" />
+            </linearGradient>
+            <pattern id={`${gid}-h`} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <rect width="1.6" height="6" fill="var(--ev-away)" opacity="0.5" />
+            </pattern>
+          </defs>
+          {/* Grid: recessive. */}
+          {[0, 0.5, 1].map((v) => (
+            <g key={v}>
+              <line x1={PAD_L} x2={PAD_L + plotW} y1={sy(v)} y2={sy(v)} stroke="var(--line)" strokeDasharray={v === 0 ? undefined : '2 4'} />
+              <text x={PAD_L - 6} y={sy(v) + 3.5} textAnchor="end" className="fill-fg-dim text-[10px]">
+                {v === 1 ? 'High' : v === 0.5 ? 'Mid' : 'Low'}
+              </text>
+            </g>
+          ))}
+          {/* Looked away: hatched bands behind. */}
+          {away.map((e) => (
+            <rect key={e.id} x={sx(e.x)} y={6} width={Math.max(3, sx(e.x + e.durMs) - sx(e.x))} height={H + LANE - 6} fill={`url(#${CSS.escape(`${gid}-h`)})`} rx={2} onMouseEnter={() => setHover({ x: sx(e.x), kind: 'event', id: e.id })} onMouseLeave={() => setHover(null)} onClick={() => onSelect(e.id)} className="cursor-pointer" data-testid="tl-away" />
+          ))}
+          {paths.map((p, i) => (
+            <g key={i}>
+              <path d={p.area} fill={`url(#${CSS.escape(`${gid}-a`)})`} />
+              <path d={p.line} fill="none" stroke="var(--fg)" strokeOpacity={0.82} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            </g>
+          ))}
+          {/* Crosshair hit area. */}
+          <rect
+            x={PAD_L}
+            y={0}
+            width={plotW}
+            height={H}
+            fill="transparent"
+            onMouseMove={(e) => {
+              const r = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
+              setHover({ x: e.clientX - r.left, kind: 'curve' });
+            }}
+            onMouseLeave={() => setHover(null)}
+          />
+          {hoverBin !== null && sm[hoverBin] != null && (
+            <g pointerEvents="none">
+              <line x1={sx((hoverBin + 0.5) * binMs)} x2={sx((hoverBin + 0.5) * binMs)} y1={4} y2={H} stroke="var(--fg-dim)" strokeDasharray="2 3" />
+              <circle cx={sx((hoverBin + 0.5) * binMs)} cy={sy(sm[hoverBin]!)} r={4.5} fill="var(--fg)" stroke="var(--surface)" strokeWidth={2} />
+            </g>
+          )}
+          {/* Moments lane. */}
+          <line x1={PAD_L} x2={PAD_L + plotW} y1={H + LANE / 2} y2={H + LANE / 2} stroke="var(--line)" />
+          {marks.map((e) => {
+            const meta = EVENT_META[e.kind];
+            const x0 = sx(e.x);
+            const wBar = Math.max(8, sx(e.x + e.durMs) - x0);
+            const sel = selected === e.id;
+            return (
+              <g key={e.id} className="cursor-pointer" onMouseEnter={() => setHover({ x: x0, kind: 'event', id: e.id })} onMouseLeave={() => setHover(null)} onClick={() => onSelect(e.id)} data-testid={`tl-${e.kind}`}>
+                <rect x={x0 - 4} y={H + 4} width={wBar + 8} height={LANE - 8} fill="transparent" />
+                {meta.bar ? (
+                  <rect x={x0} y={H + LANE / 2 - 4} width={wBar} height={8} rx={4} fill={`var(${meta.color})`} stroke="var(--surface)" strokeWidth={2} paintOrder="stroke" />
+                ) : (
+                  <circle cx={x0} cy={H + LANE / 2} r={5} fill={`var(${meta.color})`} stroke="var(--surface)" strokeWidth={2} />
+                )}
+                {sel && <rect x={x0 - 3} y={H + LANE / 2 - 8} width={(meta.bar ? wBar : 0) + 6} height={16} rx={6} fill="none" stroke="var(--fg)" strokeWidth={1.5} />}
+              </g>
+            );
+          })}
+          {/* X axis. */}
+          {ticks.map((t) => (
+            <text key={t} x={sx(t)} y={H + LANE + 16} textAnchor={t === 0 ? 'start' : 'middle'} className="tnum fill-fg-dim text-[10px]">
+              {clock(t)}
+            </text>
+          ))}
+        </svg>
+      )}
+      {hover && (hoverEvent || (hoverBin !== null && sm[hoverBin] != null)) && (
+        <div className="pointer-events-none absolute z-10 w-max max-w-[240px] -translate-x-1/2 rounded-[10px] border border-line-strong bg-overlay p-2 text-[11.5px] shadow-pop" style={{ left: Math.min(width - 120, Math.max(120, hover.x)), top: hoverEvent ? H - 120 : 0 }}>
+          {hoverEvent ? (
+            <>
+              {hoverEvent.thumb && thumbs[hoverEvent.thumb] && <img src={thumbs[hoverEvent.thumb]} alt="" className="mb-1.5 max-h-[96px] w-full rounded-[6px] object-cover" />}
+              <div className="flex items-center gap-1.5 font-medium text-fg">
+                <EventSwatch kind={hoverEvent.kind} />
+                {EVENT_META[hoverEvent.kind].label}
+              </div>
+              <div className="tnum mt-0.5 text-fg-muted">
+                {clock(hoverEvent.x)} · {eventDetail(hoverEvent)}
+              </div>
+            </>
+          ) : (
+            <div className="tnum text-fg">
+              <span className="text-fg-muted">{clock(hoverBin! * binMs)}</span> · attention {Math.round(sm[hoverBin!]! * 100)}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 pl-[34px] text-[11.5px] text-fg-muted" aria-label="Legend">
+        {(['hold', 'noblink', 'smile', 'away'] as const).map((k) => (
+          <span key={k} className="inline-flex items-center gap-1.5">
+            <EventSwatch kind={k} />
+            {k === 'smile' ? 'Expression' : EVENT_META[k].label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function eventDetail(e: Pick<ReportEvent, 'kind' | 'durMs' | 'peak'>): string {
+  const s = Math.max(1, Math.round(e.durMs / 1000));
+  switch (e.kind) {
+    case 'hold':
+      return `breathing paused ${s} s`;
+    case 'noblink':
+      return `no blinks for ${s} s`;
+    case 'away':
+      return `looked away ${s} s`;
+    default:
+      return `${EVENT_META[e.kind].label.toLowerCase()} probability ${e.peak ?? '–'}%`;
+  }
+}
+
+export function EventSwatch({ kind, size = 10 }: { kind: ReportEvent['kind']; size?: number }) {
+  const meta = EVENT_META[kind];
+  if (kind === 'away') return <span className="hatch inline-block shrink-0 rounded-[3px] border border-line-strong" style={{ width: size + 4, height: size }} aria-hidden />;
+  return <span className={cx('inline-block shrink-0', meta.bar ? 'rounded-full' : 'rounded-full')} style={{ width: meta.bar ? size + 6 : size, height: meta.bar ? size - 4 : size, background: `var(${meta.color})` }} aria-hidden />;
 }

@@ -1,14 +1,13 @@
 {
-  "name": "@together/desktop",
+  "name": "@counterfeed/desktop",
   "version": "1.0.0",
-  "productName": "Together",
+  "productName": "Counterfeed",
   "private": true,
-  "description": "Together: see each other breathe, and breathe in step.",
-  "author": "Together",
+  "description": "Counterfeed: see what your feed, or a project, does to your attention.",
+  "author": "Counterfeed",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "dev:peer2": "TOGETHER_PEER=2 electron-vite dev -- --together-peer2",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "dist": "electron-vite build && electron-builder --mac --arm64 --publish never",
@@ -19,8 +18,6 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.4",
-    "@together/shared": "*",
-    "@together/signal": "*",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.2.1",
@@ -32,12 +29,12 @@
     "react-dom": "^19.3.1",
     "tailwindcss": "^4.3.4",
     "vite": "^8.3.6",
-    "ws": "^8.22.1",
-    "zustand": "^5.0.16"
+    "zustand": "^5.0.16",
+    "@counterfeed/shared": "*"
   },
   "build": {
-    "appId": "app.together.desktop",
-    "productName": "Together",
+    "appId": "app.counterfeed.desktop",
+    "productName": "Counterfeed",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -57,19 +54,23 @@
           ]
         }
       ],
-      "category": "public.app-category.healthcare-fitness",
+      "category": "public.app-category.lifestyle",
       "icon": "build/icon.png",
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "NSCameraUsageDescription": "Together measures your breathing and pulse from the camera on this Mac, and shows your video to the person you're calling.",
-        "NSMicrophoneUsageDescription": "Together sends your voice to the person you're calling. Nothing is recorded."
+        "NSCameraUsageDescription": "Counterfeed measures your breathing, blinking and pulse from the camera on this Mac while you scroll or review. Video never leaves this Mac.",
+        "NSScreenCaptureUsageDescription": "Counterfeed keeps small pictures of the window you chose, on this Mac only, so your report can show what was on screen."
       },
       "extraResources": [
         {
           "from": "../../node_modules/@smartspectra/node-sdk-darwin-${arch}/",
           "to": "smartspectra"
+        },
+        {
+          "from": "resources/demo-pack/",
+          "to": "demo-pack"
         }
       ]
     }

@@ -1,56 +1,53 @@
-import type { PhaseResult } from '@together/shared';
+import type { EventKind, Report } from '@counterfeed/shared';
 
 export function formatDay(ms: number): string {
   const d = new Date(ms);
   const today = new Date();
   const yest = new Date(Date.now() - 86_400_000);
   const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-  if (same(d, today)) return `today, ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-  if (same(d, yest)) return 'yesterday';
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  if (same(d, today)) return `Today, ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  if (same(d, yest)) return `Yesterday, ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-export function formatDate(ms: number): string {
-  return new Date(ms).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+/** "3:07" (minutes:seconds), for positions on a timeline. */
+export function clock(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** Fewer usable surrogates than this and we don't claim anything about chance. */
-export const MIN_SURROGATES = 100;
-
-/**
- * Turn a phase result into honest words. "Above chance" is claimed only when the observed value beats at
- * least 95 % of at least 100 circular-shift surrogates; otherwise we say it looks like chance, or that there
- * wasn't enough data to tell.
- */
-export function verdict(r: PhaseResult | null): { headline: string; short: string; detail: string; strong: boolean } {
-  if (!r) return { headline: 'Not enough quiet signal to compare', short: 'Not enough signal', detail: 'Stillness, steady light and not talking all help.', strong: false };
-  const x = r.ratio;
-  const pct = Math.round(r.percentile);
-  if (r.chance.n < MIN_SURROGATES) {
-    return { headline: 'Too short to compare with chance', short: 'Too short to tell', detail: `There were ${Math.round(r.plv * 100)} points of steady rhythm, but not enough clean signal to test it against chance.`, strong: false };
-  }
-  if (r.percentile >= 95 && x >= 1.05) {
-    return {
-      headline: `${x.toFixed(1)}× more in step than chance`,
-      short: `${x.toFixed(1)}× in step`,
-      detail: `More in step than ${pct}% of random pairings of the same two breaths.`,
-      strong: true,
-    };
-  }
-  return {
-    headline: 'About as in step as chance',
-    short: 'Like chance',
-    detail:
-      pct < 50
-        ? 'Two people breathing at a similar pace look this in step by accident; there was no sign of syncing up beyond that.'
-        : `More in step than ${pct}% of random pairings of the same breaths; it takes 95% to call it more than chance.`,
-    strong: false,
-  };
+/** "4 min 12 s", "45 s". */
+export function duration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m} min ${r} s` : `${m} min`;
 }
 
-/** "2 min", "1.5 min", "45 s": a phase length for copy. */
-export function minutes(ms: number): string {
-  if (ms < 60_000) return `${Math.round(ms / 1000)} s`;
-  const m = Math.round((ms / 60_000) * 2) / 2;
-  return `${m % 1 ? m.toFixed(1) : m} min`;
+export const EVENT_META: Record<EventKind, { label: string; color: string; bar: boolean }> = {
+  hold: { label: 'Breathing pause', color: '--ev-hold', bar: true },
+  noblink: { label: 'Unbroken stare', color: '--ev-stare', bar: true },
+  smile: { label: 'Smile', color: '--ev-face', bar: false },
+  surprise: { label: 'Surprise', color: '--ev-face', bar: false },
+  frown: { label: 'Frown', color: '--ev-face', bar: false },
+  away: { label: 'Looked away', color: '--ev-away', bar: false },
+};
+
+/** Self-report scale (how you feel), 1-5. Words, not faces, so nobody has to read an emoji. */
+export const FELT = ['Low', 'Meh', 'Okay', 'Good', 'Great'] as const;
+export const feltWord = (v: number | null) => (v === null ? '–' : FELT[v - 1] ?? '–');
+
+export const MODE_LABEL: Record<Report['mode'], string> = { feed: 'Feed check', review: 'Review', hooks: 'Hook test', focus: 'Focus session' };
+
+export function sourceLabel(r: Pick<Report, 'content' | 'title' | 'mode'> & { clips?: Report['clips'] }): string {
+  if (r.mode === 'hooks') return r.title || `${r.clips?.length ?? 0} clips`;
+  if (r.mode === 'focus') return r.title || 'Focus session';
+  if (r.mode === 'review' && r.title) return r.title;
+  return r.content.name || (r.mode === 'feed' ? 'Feed' : 'Project');
+}
+
+export function round(v: number | null, digits = 0): string {
+  if (v === null || !Number.isFinite(v)) return '–';
+  return v.toFixed(digits);
 }

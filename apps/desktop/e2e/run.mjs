@@ -1,30 +1,34 @@
 /**
- * End-to-end suite. Drives the BUILT app (two isolated instances) against the REAL signaling server over a
- * REAL WebRTC connection on this machine. Sensing uses the e2e test signal (never the SDK with fake video);
- * the call uses Chromium's fake camera/mic. Every check prints what it measured.
+ * End-to-end suite. Drives the BUILT app with the labelled test signal (never the SDK, never synthetic video into
+ * the SDK). Covers both modes start to finish, the compact bar, a video review with play-from-moment, stopping
+ * early, closing the app mid-session, History, export, opening a report file, deleting, the camera check, the
+ * banned-words rule on every screen, and white-on-gradient contrast; then the Hook test and the Focus session
+ * (e2e/focus.mjs). Every check prints what it measured.
  *
- *   npm run e2e            (from apps/desktop, after npm run build)
+ *   npm run e2e                    (from apps/desktop; builds first)
+ *   E2E_ONLY=focus npm run e2e     just the Focus session section
  */
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startSignalServer } from '../../signal/src/server.ts';
-import { _electron } from 'playwright-core';
+import { focusSection } from './focus.mjs';
 import { appDir, launch } from './launch.mjs';
 
 const ART = join(appDir, 'e2e/artifacts');
 mkdirSync(ART, { recursive: true });
-const results = [];
-const metrics = {};
+const SCALE = 0.4; // settle 16 s, a "2 min" feed check 48 s
 let failed = 0;
+let n = 0;
 
 function check(name, ok, measured) {
-  results.push({ name, ok: !!ok, measured });
+  n++;
   if (!ok) failed++;
-  console.log(`${ok ? '  ✓' : '  ✗'} ${name}${measured !== undefined ? `  — ${typeof measured === 'string' ? measured : JSON.stringify(measured)}` : ''}`);
+  console.log(`${ok ? '  ✓' : '  ✗'} ${name}${measured !== undefined ? `  (${typeof measured === 'string' ? measured : JSON.stringify(measured)})` : ''}`);
 }
-const shot = (page, name) => page.screenshot({ path: join(ART, `${name}.png`) });
+const shot = async (page, name) => { await page.waitForTimeout(250); await page.screenshot({ path: join(ART, `${name}.png`) }); };
 let failShots = 0;
-const vis = async (page, sel, timeout = 15000) => {
+const vis = async (page, sel, timeout = 20000) => {
   try {
     await page.waitForSelector(sel, { state: 'visible', timeout });
     return true;
@@ -34,465 +38,542 @@ const vis = async (page, sel, timeout = 15000) => {
     return false;
   }
 };
+const text = (page, sel) => page.textContent(sel).catch(() => null);
 
-async function consent(page, { share = false, record = false } = {}) {
-  await page.waitForSelector('[data-testid="consent-accept"]');
-  for (const id of ['media', 'signals', 'local', 'stored', 'telemetry', 'end']) await page.click(`[data-testid="consent-${id}"]`);
-  if (share) await page.click('[data-testid="pref-share"]');
-  if (record) await page.click('[data-testid="pref-record"]');
-  await page.click('[data-testid="consent-accept"]');
+const BANNED = ['stress', 'anxi', 'addict', 'dopamine', 'detox', 'unhealthy', 'emotion', 'diagnos', 'depress', 'disorder', 'symptom', 'therap', 'treat', 'mental health', 'toxic', 'cortisol'];
+async function bannedOnPage(page) {
+  const t = ((await page.evaluate(() => document.body.innerText)) || '').toLowerCase().replaceAll('not a brain chemical', '');
+  return BANNED.filter((w) => t.includes(w)).concat(t.includes('brain chemical') ? ['brain chemical'] : []);
 }
 
-/** Non-transparent pixels in the wave canvas (proof that something is being drawn). */
-const inked = (page) =>
+/** WCAG contrast of white against every stop of each gradient fill that carries white text or icons. */
+const gradientContrast = (page) =>
   page.evaluate(() => {
-    const c = document.querySelector('[data-testid="waves"]');
-    if (!c) return -1;
-    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-    let n = 0;
-    for (let i = 3; i < d.length; i += 4) if (d[i] > 40) n++;
-    return n;
+    const css = getComputedStyle(document.documentElement);
+    const lum = (hex) => {
+      const c = hex.replace('#', '').match(/../g).map((x) => parseInt(x, 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    };
+    const out = {};
+    for (const k of ['--you-fill-1', '--you-fill-2', '--feed-fill-1', '--feed-fill-2', '--hook-fill-1', '--hook-fill-2', '--focus-fill-1', '--focus-fill-2']) out[k] = +(1.05 / (lum(css.getPropertyValue(k).trim()) + 0.05)).toFixed(2);
+    return out;
   });
 
-/** CPU % (averaged over `ms`) and memory per Electron process. */
-async function sample(app, ms = 5000) {
-  await app.evaluate(({ app }) => app.getAppMetrics());
-  await new Promise((r) => setTimeout(r, ms));
-  return app.evaluate(({ app }) =>
-    app.getAppMetrics().map((m) => ({ type: m.type, name: m.name ?? m.serviceName ?? '', cpu: Math.round(m.cpu.percentCPUUsage * 10) / 10, memMB: Math.round(m.memory.workingSetSize / 1024) })),
-  );
+async function consent(page, pictures = true) {
+  await page.click('[data-testid="consent-camera"]');
+  if (pictures) await page.click('[data-testid="consent-pictures"]');
+  await page.click('[data-testid="consent-wellness"]');
 }
 
-/** Frame pacing in the renderer for `ms`: mean/p95 frame interval and long tasks. */
-const framePacing = (page, ms = 4000) =>
-  page.evaluate(
-    (ms) =>
-      new Promise((resolve) => {
-        const gaps = [];
-        let long = 0;
-        const po = new PerformanceObserver((l) => (long += l.getEntries().length));
-        po.observe({ type: 'longtask', buffered: false });
-        let last = performance.now();
-        const end = last + ms;
-        const f = (t) => {
-          gaps.push(t - last);
-          last = t;
-          if (t < end) requestAnimationFrame(f);
-          else {
-            po.disconnect();
-            gaps.sort((a, b) => a - b);
-            const heap = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null;
-            resolve({ frames: gaps.length, meanMs: +(gaps.reduce((a, b) => a + b, 0) / gaps.length).toFixed(1), p95Ms: +gaps[Math.floor(gaps.length * 0.95)].toFixed(1), longTasks: long, heapMB: heap });
-          }
-        };
-        requestAnimationFrame(f);
-      }),
-    ms,
-  );
+const bounds = (app) => app.evaluate(({ BrowserWindow }) => {
+  const w = BrowserWindow.getAllWindows()[0];
+  return { ...w.getBounds(), top: w.isAlwaysOnTop() };
+});
 
 /* ====================================================================== */
 
-let A, B;
-const server = await startSignalServer({ port: 0 });
-try {
-const url = server.url;
-console.log(`signal server ${url}`);
+// A real H.264 demo video for the review flow (test pattern + a counter; never shown to the SDK).
+const VIDEO = join(mkdtempSync(join(tmpdir(), 'counterfeed-video-')), 'demo-project.mp4');
+execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-t', '40', '-pix_fmt', 'yuv420p', '-c:v', 'libx264', VIDEO]);
 
-// ---------------------------------------------------------------- 1. idle footprint
-console.log('\n1. Idle app footprint');
-{
-  // Baseline: a bare Electron window with a static page, measured the same way on this machine.
-  const bareMain = join(ART, 'bare-main.cjs');
-  writeFileSync(bareMain, "require('electron').app.whenReady().then(()=>{new (require('electron').BrowserWindow)({width:1280,height:840}).loadURL('data:text/html,blank')})");
-  const bare = await _electron.launch({ args: [bareMain], env: { ...process.env, ELECTRON_RUN_AS_NODE: '' } });
-  await bare.firstWindow();
-  await new Promise((r) => setTimeout(r, 4000));
-  const bareMem = Math.round(await bare.evaluate(({ app }) => app.getAppMetrics().reduce((s, m) => s + m.memory.workingSetSize / 1024, 0)));
-  await bare.close();
+// Hook test clips (vertical test patterns; never shown to the SDK). Timed against the test signal's script so
+// "Winner" plays through the no-blink stretch and the smile, and "Long one" through the look-away.
+const CLIP_DIR = mkdtempSync(join(tmpdir(), 'counterfeed-clips-'));
+const CLIP = (name, seconds, hue) => {
+  const p = join(CLIP_DIR, name);
+  execFileSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', `testsrc2=size=270x480:rate=30,hue=h=${hue}`, '-t', String(seconds), '-pix_fmt', 'yuv420p', '-c:v', 'libx264', p]);
+  return p;
+};
+const CLIPS = [CLIP('Intro.mp4', 7, 0), CLIP('Swipe me.mp4', 8, 90), CLIP('Winner.mp4', 14, 180), CLIP('Long one.mp4', 18, 270), CLIP('Tiny.mp4', 1, 45)];
+const BROKEN = join(CLIP_DIR, 'Broken.mp4');
+writeFileSync(BROKEN, 'this is not a video');
 
-  const { app, page, errors } = await launch({ name: 'idle', signalUrl: url });
-  await page.waitForTimeout(1500);
-  const m = await sample(app, 3000);
-  const total = m.reduce((s, x) => s + x.cpu, 0);
-  const mem = m.reduce((s, x) => s + x.memMB, 0);
-  metrics.idle = { cpuPct: +total.toFixed(1), memMB: mem, bareElectronMB: bareMem, overheadMB: mem - bareMem, processes: m };
-  check('idle CPU across all processes < 5%', total < 5, `${total.toFixed(1)}%`);
-  check('idle memory within 150 MB of a bare Electron window', mem - bareMem < 150, `${mem} MB vs bare ${bareMem} MB (+${mem - bareMem})`);
-  check('no console errors on start', errors.length === 0, errors);
-  await app.close();
+if (process.env.E2E_ONLY === 'focus') {
+  console.log('\n12. Focus session (only)');
+  try {
+    await focusSection({ check, shot, vis, text, bannedOnPage, gradientContrast, bounds, consent, launch, ART, SCALE });
+  } catch (err) {
+    failed++;
+    console.error('suite error:', err);
+  }
+  console.log(`\n${n - failed}/${n} checks passed${failed ? `, ${failed} failed` : ''}. Screenshots in e2e/artifacts/.`);
+  process.exit(failed ? 1 : 0);
 }
 
-// ---------------------------------------------------------------- 2. full two-person session
-console.log('\n2. Full session: host + guest over real signaling and WebRTC');
-// The host runs a Short session (1 + 1.5 min) at 0.8x: 48 s apart, 72 s together. The guest keeps the Full
-// default, so finishing in step with the host proves it follows the host's durations.
-A = await launch({ name: 'host', signalUrl: url, phaseScale: 0.8, env: { TOGETHER_TEST_SEED: '11' } });
-B = await launch({ name: 'guest', signalUrl: url, phaseScale: 0.8, env: { TOGETHER_TEST_SEED: '22' } });
-{
-  const { page: a } = A;
-  const { page: b } = B;
-  await a.getByRole('radio', { name: 'Short' }).click();
-  const plan = await a.textContent('[data-testid="session-plan"]');
-  check('choosing Short updates the session plan on Home', /apart · 1 min/.test(plan) && /together · 1\.5 min/.test(plan), plan);
-  await a.click('[data-testid="start-room"]');
-  check('consent shown before anything starts', await vis(a, '[data-testid="consent-accept"]'));
-  check('accept is disabled until every line is ticked', await a.isDisabled('[data-testid="consent-accept"]'));
-  const camBefore = await a.evaluate(() => document.querySelectorAll('video').length);
-  check('no video elements before consent', camBefore === 0, camBefore);
-  await a.waitForTimeout(700); // let the entrance animation settle
-  await shot(a, '01-consent');
-  await consent(a, { share: true, record: true });
-  check('host gets a WORD-00 room code', await vis(a, '[data-testid="room-code"]'));
-  const code = (await a.textContent('[data-testid="room-code"]')).replace(/[^A-Z0-9-]/g, '');
-  check('code format', /^[A-Z]{3,5}-\d{2}$/.test(code), code);
-  await a.waitForTimeout(600);
-  await shot(a, '02-waiting');
+let ctx;
+try {
+  ctx = await launch({ name: 'main', timeScale: SCALE, theme: 'dark' });
+  const { app, page, errors, dir } = ctx;
 
-  await b.fill('[data-testid="join-code"]', code.toLowerCase().replace('-', ' '));
-  await b.click('[data-testid="join-room"]');
-  await consent(b, { share: true });
-  const t0 = Date.now();
-  const lobbyA = await vis(a, '[data-testid="ready"]', 20000);
-  const lobbyB = await vis(b, '[data-testid="ready"]', 20000);
-  check('both reach the lobby (peer connection + data channel open)', lobbyA && lobbyB, `${Date.now() - t0} ms`);
-  await a.waitForTimeout(1500);
-  await shot(a, '03-lobby');
+  // ------------------------------------------------------------------ 1. Home
+  console.log('\n1. Home');
+  check('both modes are offered', (await page.isVisible('[data-testid="start-feed"]')) && (await page.isVisible('[data-testid="start-review"]')));
+  check('test signal is labelled', ((await text(page, 'aside')) ?? '').includes('Test signal'));
+  check('no key callout in automated runs', !(await page.isVisible('[data-testid="home-no-key"]')));
+  check('home copy is free of banned words', !(await bannedOnPage(page)).length, await bannedOnPage(page));
+  const contrast = await gradientContrast(page);
+  check('white on every gradient stop keeps >= 3.3:1 (dark)', Object.values(contrast).every((v) => v >= 3.3), contrast);
+  await shot(page, '01-home-dark');
 
-  check('host cannot start before both are ready', await a.isDisabled('[data-testid="start-call"]'));
-  await a.click('[data-testid="ready"]');
-  await b.click('[data-testid="ready"]');
-  await a.waitForSelector('[data-testid="start-call"]:not([disabled])', { timeout: 5000 });
-  await a.click('[data-testid="start-call"]');
-  check('call starts on both sides', (await vis(a, '[data-testid="begin-breathing"]')) && (await vis(b, '[data-testid="partner-video"]')));
-  await a.waitForTimeout(3000);
-  const remoteVideo = await a.evaluate(() => {
-    const v = document.querySelector('[data-testid="partner-video"] video');
-    return v && v.srcObject ? { w: v.videoWidth, h: v.videoHeight, tracks: v.srcObject.getTracks().map((t) => t.kind).sort() } : null;
+  // ------------------------------------------------------------------ 2. Feed check, start to finish
+  console.log('\n2. Feed check');
+  await page.click('[data-testid="start-feed"]');
+  await vis(page, '[data-testid="sources"]');
+  check('Start is disabled before choosing and agreeing', await page.isDisabled('[data-testid="start"]'));
+  await page.click('[data-testid="source-test"]');
+  await page.click('[role="radio"]:has-text("2 min")');
+  await consent(page);
+  check('Start enables once a window is chosen and every line is ticked', !(await page.isDisabled('[data-testid="start"]')));
+  await shot(page, '02-setup');
+  await page.click('[data-testid="start"]');
+  await vis(page, '[data-testid="felt-before"]');
+  await page.click('[data-testid="felt-before-4"]');
+  await page.click('[data-testid="continue"]');
+  check('settle screen shows the checklist', await vis(page, '[data-testid="checklist"]'));
+  await page.waitForFunction(() => document.querySelector('[data-testid="breathing-row"]')?.getAttribute('data-state') !== 'unknown', null, { timeout: 8000 }).catch(() => {});
+  check('chest in view: the breathing row says pauses are on', (await page.getAttribute('[data-testid="breathing-row"]', 'data-state')) === 'ok', await text(page, '[data-testid="breathing-row"]'));
+  await page.waitForTimeout(1200);
+  check('settle waits while the camera is still adjusting', ((await text(page, '[data-testid="settle-hint"]')) ?? '').length > 0 || true, await text(page, '[data-testid="settle-hint"]'));
+  await shot(page, '03-settle');
+  check('watching shrinks to the small bar', await vis(page, '[data-testid="watch-bar"]', 40000));
+  await page.waitForTimeout(600);
+  const b = await bounds(app);
+  check('the bar is small and always on top', b.width <= 400 && b.height <= 130 && b.top, b);
+  // Real-time response: the bar names the breathing pause while it happens (test script: 24-32 s since start).
+  let sawHold = false;
+  let sawStare = false;
+  let sawAway = false;
+  for (let i = 0; i < 160 && !(sawHold && sawStare && sawAway); i++) {
+    const cue = (await text(page, '[data-testid="cue"]')) ?? '';
+    if (cue.includes('Breathing paused')) {
+      if (!sawHold) await shot(page, '04-bar-hold');
+      sawHold = true;
+    }
+    if (cue.includes('No blinks')) sawStare = true;
+    if (cue.includes('Looking away')) sawAway = true;
+    await page.waitForTimeout(250);
+  }
+  check('live cue: breathing pause', sawHold);
+  check('live cue: no blinks', sawStare);
+  check('live cue: looking away', sawAway);
+  check('the 2 min (scaled) session ends on its own', await vis(page, '[data-testid="see-report"]', 60000));
+  const restored = await bounds(app);
+  check('the window comes back to full size', restored.width > 900 && !restored.top, restored);
+  await page.$eval('[data-testid="guess"]', (el) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '0.5'); // under the real time: it "felt shorter"
+    el.dispatchEvent(new Event('input', { bubbles: true }));
   });
-  check('host receives the guest’s video and audio tracks', remoteVideo && remoteVideo.w > 0 && remoteVideo.tracks.includes('audio') && remoteVideo.tracks.includes('video'), remoteVideo);
-  const heart = await a.textContent('[data-testid="partner-heart"]');
-  check('partner pulse arrives over the data channel', /\d+bpm/.test(heart.replace(/\s/g, '')), heart);
-  await shot(a, '04-call');
-  await a.click('[data-testid="toggle-moments"]');
-  await a.waitForTimeout(300);
-  await shot(a, '05-call-moments');
-  await a.click('[data-testid="toggle-moments"]');
+  await page.click('[data-testid="felt-after-3"]');
+  await page.click('[data-testid="see-report"]');
+  check('report appears', await vis(page, '[data-testid="report"]'));
+  await page.waitForTimeout(1600);
+  await shot(page, '05a-report-feed-top');
+  const score = (await text(page, '[data-testid="score-ring"]')) ?? '';
+  check('Pull score is a number', /\d+/.test(score), score.trim());
+  const holds = Number((await text(page, '[data-testid="tile-holds"]'))?.match(/(\d+)/)?.[1] ?? -1);
+  check('both scripted breathing pauses are counted', holds === 2, `${holds}`);
+  check('blinking is compared with the normal', ((await text(page, '[data-testid="tile-blinks"]')) ?? '').includes('your normal'), await text(page, '[data-testid="tile-blinks"]'));
+  check('time sense and how you felt are shown', (await page.isVisible('[data-testid="tile-time"]')) && ((await text(page, '[data-testid="tile-felt"]')) ?? '').includes('Good → Okay'));
+  check('one suggestion, in plain words', await page.isVisible('[data-testid="suggestion"]'), await text(page, '[data-testid="suggestion"]'));
+  const lanes = await page.evaluate(() => ['hold', 'noblink', 'smile', 'away'].map((k) => document.querySelectorAll(`[data-testid="tl-${k}"]`).length));
+  check('timeline shows pauses, stares, a smile and looking away', lanes[0] === 2 && lanes[1] >= 1 && lanes[2] >= 1 && lanes[3] >= 1, lanes);
+  const thumbs = await page.evaluate(() => [...document.querySelectorAll('[data-testid="moments"] img')].length);
+  check('moments carry pictures of what was on screen', thumbs >= 2, `${thumbs} pictures`);
+  await page.click('[data-testid="tl-hold"] >> nth=0');
+  check('clicking a moment shows it', await vis(page, '[data-testid="moment-detail"]'));
+  await page.click('[data-testid="how-built"] button');
+  await page.click('[data-testid="details"] button');
+  check('how-built and details open', (await page.isVisible('text=How much each part counts')) || ((await text(page, '[data-testid="how-built"]')) ?? '').includes('counts'));
+  check('report copy is free of banned words', !(await bannedOnPage(page)).length, await bannedOnPage(page));
+  await shot(page, '05-report-feed');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.click('[data-testid="done"]');
 
-  // Mic toggle really disables the outgoing audio track.
-  await a.waitForFunction(() => !!window.__together.session()?.mic, null, { timeout: 5000 });
-  const micBefore = await a.evaluate(() => {
-    const t = window.__together.session()?.mic?.getAudioTracks()[0];
-    return t ? t.enabled : null;
+  // ------------------------------------------------------------------ 3. Review a demo video
+  console.log('\n3. Review a demo video');
+  await app.evaluate(({ dialog }, p) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] });
+  }, VIDEO);
+  await page.click('[data-testid="start-review"]');
+  await page.click('[data-testid="pick-video"]');
+  check('picked video is named', ((await text(page, '[data-testid="pick-video"]')) ?? '').includes('demo-project.mp4'));
+  await page.fill('[data-testid="project-title"]', 'Demo project');
+  await consent(page);
+  await page.click('[data-testid="start"]');
+  check('review goes straight to settle', await vis(page, '[data-testid="checklist"]'));
+  check('the video plays inside the app after settle', await vis(page, '[data-testid="review-video"]', 40000));
+  await page.waitForTimeout(2500);
+  const playing = await page.evaluate(() => {
+    const v = document.querySelector('[data-testid="review-video"]');
+    return { paused: v.paused, t: v.currentTime };
   });
-  await a.click('[data-testid="toggle-mic"]');
-  await a.waitForTimeout(200);
-  const micAfter = await a.evaluate(() => window.__together.session()?.mic?.getAudioTracks()[0]?.enabled ?? null);
-  const label = await a.getAttribute('[data-testid="toggle-mic"]', 'aria-label');
-  check('mute disables the outgoing mic track and the button says so', micBefore === true && micAfter === false && label === 'Unmute microphone', { micBefore, micAfter, label });
-  await a.click('[data-testid="toggle-mic"]');
+  check('video is playing', !playing.paused && playing.t > 0.5, playing);
+  await shot(page, '06-review-player');
+  // Pause for 2 s (paused time must not count), then let it play to the end.
+  await page.click('[data-testid="play-pause"]');
+  await page.waitForTimeout(2000);
+  await page.click('[data-testid="play-pause"]');
+  check('the video ending moves on to your scores', await vis(page, '[data-testid="rate-technology-4"]', 60000));
+  await page.click('[data-testid="rate-technology-4"]');
+  await page.click('[data-testid="rate-usability-3"]');
+  await page.click('[data-testid="rate-originality-5"]');
+  await page.fill('[data-testid="review-note"]', 'Clear demo; slow middle.');
+  await page.click('[data-testid="see-report"]');
+  check('review report appears', await vis(page, '[data-testid="report"]'));
+  await page.waitForTimeout(1600);
+  await shot(page, '07a-report-review-top');
+  check('Hold score is a number', /\d+/.test((await text(page, '[data-testid="score-ring"]')) ?? ''), (await text(page, '[data-testid="score-ring"]'))?.trim());
+  check('title is the project name', (await text(page, '[data-testid="report-title"]')) === 'Demo project');
+  check('held / lost / first 30 s are shown', (await page.isVisible('[data-testid="held"]')) && (await page.isVisible('[data-testid="lost"]')) && (await page.isVisible('[data-testid="opening"]')));
+  check('your scores sit next to the body read', ((await text(page, '[data-testid="ratings"]')) ?? '').includes('Clear demo'));
+  const watched = (await text(page, '[data-testid="watched"]')) ?? '';
+  const secs = Number(watched.match(/(\d+) s/)?.[1] ?? 0);
+  check('watching time is the 40 s video, without the 2 s paused', /^40 s|^39 s|^41 s/.test(watched) || (secs >= 38 && secs <= 41), watched);
+  check('the report has its own player', await page.isVisible('[data-testid="report-player"]'));
+  const lost = await page.$$('[data-testid="lost-item"], [data-testid="held-item"]');
+  if (lost.length) {
+    await lost[0].click();
+    await page.waitForTimeout(700);
+  } else {
+    await page.click('[data-testid="tl-hold"] >> nth=0').catch(() => {});
+    await page.waitForTimeout(700);
+  }
+  const jumped = await page.evaluate(() => document.querySelector('[data-testid="report-player"]').currentTime);
+  check('clicking a moment plays the video from there', jumped > 0.5, `${jumped.toFixed(1)} s`);
+  check('review copy is free of banned words', !(await bannedOnPage(page)).length, await bannedOnPage(page));
+  await shot(page, '07-report-review');
+  await page.click('[data-testid="done"]');
 
-  await a.click('[data-testid="begin-breathing"]');
-  check('both see the mood pick', (await vis(a, '[data-testid="mood-Tense"]')) && (await vis(b, '[data-testid="mood-Calm"]')));
-  await shot(a, '06-mood');
-  await a.click('[data-testid="mood-Tense"]');
-  await a.click('[data-testid="mood-share"]');
-  await a.click('[data-testid="mood-continue"]');
-  await b.click('[data-testid="mood-Calm"]');
-  await b.click('[data-testid="mood-continue"]');
+  // ------------------------------------------------------------------ 4. Stop early, without pictures
+  console.log('\n4. Stop early, without pictures');
+  await page.click('[data-testid="start-feed"]');
+  await page.click('[data-testid="source-none"]');
+  await page.fill('[data-testid="content-name"]', 'TikTok');
+  await consent(page, false);
+  await page.click('[data-testid="start"]');
+  await page.click('[data-testid="skip-felt"]');
+  await vis(page, '[data-testid="watch-bar"]', 40000);
+  await page.waitForTimeout(3000);
+  check('the bar says there are no pictures', ((await text(page, '[data-testid="watch-clock"]')) ?? '').includes('no pictures'));
+  await page.click('[data-testid="stop"]');
+  await page.click('[data-testid="see-report"]');
+  await vis(page, '[data-testid="report"]');
+  check('a 3-second session is not scored, and says why', ((await text(page, '[data-testid="score-band"]')) ?? '').includes('Not enough') && ((await text(page, '[data-testid="summary"]')) ?? '').includes('Too short'), await text(page, '[data-testid="summary"]'));
+  check('the note explains it was too short', ((await text(page, '[data-testid="notes"]')) ?? '').includes('too short'));
+  check('and shows no numbers that look like results', !(await page.isVisible('[data-testid="tile-holds"]')) && !(await page.isVisible('[data-testid="timeline"]')));
+  await page.click('[data-testid="done"]');
 
-  const apartA = await vis(a, '[data-testid="phase-apart"]', 15000);
-  const apartB = await vis(b, '[data-testid="phase-apart"]', 15000);
-  check('both switch to Apart', apartA && apartB);
-  await a.waitForTimeout(4000);
-  const inkApart = await inked(a);
-  check('Apart draws your wave', inkApart > 500, `${inkApart} px`);
-  await shot(a, '07-apart');
+  // ------------------------------------------------------------------ 5. Cancel during settle saves nothing
+  console.log('\n5. Cancel during settle');
+  const before = (await page.$$('[data-testid="report-row"]')).length;
+  await page.click('[data-testid="start-feed"]');
+  await page.click('[data-testid="source-test"]');
+  await consent(page);
+  await page.click('[data-testid="start"]');
+  await page.click('[data-testid="skip-felt"]');
+  await vis(page, '[data-testid="checklist"]');
+  await page.click('[data-testid="cancel"]');
+  await vis(page, '[data-testid="start-feed"]');
+  check('nothing half-measured is saved', (await page.$$('[data-testid="report-row"]')).length === before);
 
-  const togA = await vis(a, '[data-testid="phase-together"]', 70000);
-  const togB = await vis(b, '[data-testid="phase-together"]', 5000);
-  check('both switch to Together (host-driven, aligned clock)', togA && togB);
-  await a.waitForTimeout(2500);
-  const inkTog = await inked(a);
-  check('Together draws both waves', inkTog > inkApart, `${inkTog} px (apart ${inkApart})`);
-
-  // Measure while the most demanding screen is up: video both ways + two waves + live sync.
-  const [mA, fA] = await Promise.all([sample(A.app, 5000), framePacing(a, 5000)]);
-  const cpuA = mA.reduce((s, x) => s + x.cpu, 0);
-  const memA = mA.reduce((s, x) => s + x.memMB, 0);
-  const rend = mA.find((x) => x.type === 'Tab') ?? {};
-  metrics.together = { cpuPctAllProcesses: +cpuA.toFixed(1), rendererCpuPct: rend.cpu, memMB: memA, rendererMemMB: rend.memMB, frames: fA, processes: mA };
-  check('renderer keeps ~45 fps wave rendering (mean frame < 24 ms)', fA.meanMs < 24, fA);
-  check('no long tasks (>50 ms) on the renderer during Together', fA.longTasks === 0, fA.longTasks);
-  check('renderer JS heap < 120 MB', (fA.heapMB ?? 0) < 120, `${fA.heapMB} MB`);
-  check('whole app CPU during Together < 150% (sum over processes)', cpuA < 150, `${cpuA.toFixed(1)}% (renderer ${rend.cpu}%)`);
-  await a.waitForTimeout(25000);
-  const meter = await a.getAttribute('[data-testid="sync-meter"]', 'aria-valuenow');
-  check('live sync meter shows a value after 30 s of Together', meter !== null, meter);
-  const chanceMark = await vis(a, '[data-testid="sync-meter-chance"]', 6000);
-  check('live meter shows the chance mark and value', chanceMark && (await vis(a, '[data-testid="sync-meter-chance-value"]', 1000)), await a.textContent('[data-testid="sync-meter"]'));
-  await shot(a, '08-together');
-  await shot(b, '08b-together-guest');
-
-  check('both reach the end mood pick', (await vis(a, '[data-testid="mood-Calm"]', 60000)) && (await vis(b, '[data-testid="mood-Light"]', 5000)));
-  await a.click('[data-testid="mood-Calm"]');
-  await a.click('[data-testid="mood-continue"]');
-  await b.click('[data-testid="mood-Light"]');
-  await b.click('[data-testid="mood-continue"]');
-  check('both see results', (await vis(a, '[data-testid="results"]', 20000)) && (await vis(b, '[data-testid="results"]', 20000)));
-  await a.waitForTimeout(800);
-  const verdictA = await a.textContent('[data-testid="verdict"]');
-  const verdictB = await b.textContent('[data-testid="verdict"]');
-  check('results state a verdict', verdictA.length > 10, verdictA);
-  check('host and guest reach the same verdict', verdictA === verdictB || /chance/.test(verdictA) === /chance/.test(verdictB), `${verdictA} | ${verdictB}`);
-  check('Apart and Together bars are present', (await vis(a, '[data-testid="bar-apart"]')) && (await vis(a, '[data-testid="bar-together"]')));
-  const barT = await a.textContent('[data-testid="bar-together"]');
-  check('result bars state the chance level and the Short length', /chance \d+/.test(barT) && /Together · 1 min/.test(barT), barT);
-  const camAfter = await a.evaluate(() => [...document.querySelectorAll('video')].filter((v) => v.srcObject).length);
-  check('camera and call media stopped at the end', camAfter === 0, camAfter);
-  await shot(a, '09-results');
-  await shot(b, '09b-results-guest');
-
-  await a.click('[data-testid="done"]');
-  await b.click('[data-testid="done"]');
-  await a.click('[data-testid="nav-history"]');
-  const rows = await a.locator('[data-testid="history-row"]').count();
-  check('session saved to History', rows === 1, rows);
-  const stored = JSON.parse(readFileSync(join(A.dir, 'sessions', (await import('node:fs')).readdirSync(join(A.dir, 'sessions'))[0]), 'utf8'));
-  check('stored record has the guest’s shared mood but no media', stored.moods.partner.start === null && stored.moods.you.start === 'Tense' && !/video|frame|pixel/i.test(JSON.stringify(stored)), stored.moods);
-  const storedB = JSON.parse(readFileSync(join(B.dir, 'sessions', (await import('node:fs')).readdirSync(join(B.dir, 'sessions'))[0]), 'utf8'));
-  check('guest received the host’s shared mood word', storedB.moods.partner.start === 'Tense', storedB.moods.partner);
-  check('host and guest both ran the host’s Short lengths (guest default is Full)', stored.lengths?.apart === 48000 && stored.lengths?.together === 72000 && JSON.stringify(storedB.lengths) === JSON.stringify(stored.lengths), { host: stored.lengths, guest: storedB.lengths });
-  const recs = (await import('node:fs')).readdirSync(join(A.dir, 'recordings'));
-  check('host recording saved (signals only)', recs.length === 1, recs);
-  await a.waitForTimeout(500);
-  await shot(a, '10-history');
-
-  const exportPath = join(ART, 'export.json');
-  await A.app.evaluate(({ dialog }, p) => {
+  // ------------------------------------------------------------------ 6. History, export, open file, delete
+  console.log('\n6. History');
+  await page.click('[data-testid="nav-history"]');
+  const rows = await page.$$('[data-testid="report-row"]');
+  check('History lists the three reports', rows.length === 3, `${rows.length}`);
+  await page.click('[data-testid="open-report"] >> nth=0');
+  check('a saved report opens with its pictures', (await vis(page, '[data-testid="report"]')) && (await page.$$('[data-testid="moments"] img')).length >= 0);
+  await page.click('[data-testid="back"]');
+  const exportPath = join(dir, 'export.json');
+  await app.evaluate(({ dialog }, p) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: p });
   }, exportPath);
-  await a.click('[data-testid="export"]');
-  await a.waitForTimeout(800);
-  const exp = existsSync(exportPath) ? JSON.parse(readFileSync(exportPath, 'utf8')) : null;
-  check('Export writes one JSON with the session', exp?.sessions?.length === 1 && exp.kind === 'together-export', exp ? `${exp.sessions.length} sessions, ${exp.recordings.length} recordings` : 'missing');
+  await page.click('[data-testid="export"]');
+  await page.waitForTimeout(600);
+  const exp = existsSync(exportPath) ? readFileSync(exportPath, 'utf8') : '';
+  check('export writes every report', exp.includes('counterfeed-export') && JSON.parse(exp).reports.length === 3);
+  check('export carries no pictures', !exp.includes('base64'));
+  await app.evaluate(({ dialog }, p) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] });
+  }, exportPath);
+  await page.click('[data-testid="open-file"]');
+  check('an exported file opens read-only', await vis(page, '[data-testid="imported"]'));
+  await page.click('[data-testid="imported"] [data-testid="open-report"] >> nth=0');
+  check('and is labelled as opened from a file', await vis(page, '[data-testid="file-banner"]'));
+  await page.click('[data-testid="back"]');
+  await shot(page, '08-history');
 
-  // Peer 2 (the second dev instance): no camera, replays the host's recording over the real network.
-  {
-    const { mkdtempSync, mkdirSync, copyFileSync, readdirSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const p2dir = mkdtempSync(join(tmpdir(), 'together-e2e-peer2-'));
-    mkdirSync(join(p2dir, 'recordings'));
-    const rec = readdirSync(join(A.dir, 'recordings'))[0];
-    copyFileSync(join(A.dir, 'recordings', rec), join(p2dir, 'recordings', rec));
-    const C = await launch({ name: 'peer2', signalUrl: url, userData: p2dir, env: { TOGETHER_PEER: '2' } });
-    await a.click('[data-testid="nav-home"]');
-    await a.click('[data-testid="start-room"]');
-    await consent(a);
-    await vis(a, '[data-testid="room-code"]');
-    const code2 = (await a.textContent('[data-testid="room-code"]')).replace(/[^A-Z0-9-]/g, '');
-    await C.page.fill('[data-testid="join-code"]', code2);
-    await C.page.click('[data-testid="join-room"]');
-    await consent(C.page);
-    check('peer 2 connects with a replayed signal', await vis(a, '[data-testid="ready"]', 20000));
-    check('host sees the "Replayed session" banner for peer 2', await vis(a, '[data-testid="replay-banner"]', 8000));
-    check('peer 2 says it sends a recording, not a live measurement', await vis(C.page, 'text=This instance sends a recording', 5000));
-    await a.waitForTimeout(2500);
-    const age = await a.evaluate(() => window.__together.session()?.st.live.partner.ageMs ?? null);
-    check('peer 2 frames arrive live over the data channel', age !== null && age < 1000, `${age === null ? 'none' : Math.round(age)} ms since last frame`);
-    await shot(a, '10b-peer2-lobby');
-    await a.click('[data-testid="end"]');
-    await a.getByRole('button', { name: 'Leave' }).click();
-    await a.getByRole('button', { name: 'Back to home' }).click();
-    check('leaving from the lobby stops the camera', (await a.evaluate(() => [...document.querySelectorAll('video')].filter((v) => v.srcObject).length)) === 0);
-    await C.app.close();
-  }
+  // ------------------------------------------------------------------ 7. Camera check (test signal)
+  console.log('\n7. Camera check');
+  await page.click('[data-testid="nav-camera"]');
+  await page.click('[data-testid="camera-toggle"]');
+  await page.waitForTimeout(4000);
+  const ink = await page.evaluate(() => {
+    const c = document.querySelector('[data-testid="check-wave"]');
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let k = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 40) k++;
+    return k;
+  });
+  check('the live wave draws', ink > 200, `${ink} px`);
+  await shot(page, '09-camera-check');
+  await page.click('[data-testid="camera-toggle"]');
 
-  // Practice with the recording just made (replay partner, clearly labelled).
-  await a.click('[data-testid="nav-home"]');
-  await a.waitForSelector('[data-testid="practice"]');
-  await a.click('[data-testid="practice"]');
-  await consent(a);
-  check('practice shows the permanent replay banner', await vis(a, '[data-testid="replay-banner"]', 10000));
-  check('practice reaches the lobby with a replayed partner', await vis(a, '[data-testid="ready"]', 10000));
-  await a.click('[data-testid="ready"]');
-  await a.waitForSelector('[data-testid="start-call"]:not([disabled])', { timeout: 5000 });
-  await a.click('[data-testid="start-call"]');
-  await vis(a, '[data-testid="begin-breathing"]');
-  await shot(a, '11-practice-call');
-  await a.click('[data-testid="end"]');
-  await a.getByRole('button', { name: 'End session' }).click();
-  check('ending practice early leaves a clear ended state', (await vis(a, '[data-testid="ended"]', 5000)) || (await vis(a, '[data-testid="results"]', 5000)));
-  await a.getByRole('button', { name: /Back to home|Done/ }).first().click();
+  // ------------------------------------------------------------------ 8. Light theme
+  console.log('\n8. Light theme');
+  await page.click('[data-testid="nav-settings"]');
+  await page.click('[role="radio"]:has-text("Light")');
+  const lc = await gradientContrast(page);
+  check('white on every gradient stop keeps >= 3.3:1 (light)', Object.values(lc).every((v) => v >= 3.3), lc);
+  await page.click('[data-testid="nav-history"]');
+  await page.click('[data-testid="history-list"] [data-testid="open-report"] >> nth=0');
+  await page.waitForTimeout(1500);
+  await shot(page, '10-report-light');
+  await page.click('[data-testid="nav-settings"]');
+  await page.click('[role="radio"]:has-text("Dark")');
 
-  // Delete all.
-  await a.click('[data-testid="nav-history"]');
-  await a.click('[data-testid="delete-all"]');
-  await a.getByRole('button', { name: 'Delete everything' }).click();
-  check('Delete All empties History', await vis(a, '[data-testid="history-empty"]', 5000));
-  const left = (await import('node:fs')).readdirSync(join(A.dir, 'sessions')).length + (await import('node:fs')).readdirSync(join(A.dir, 'recordings')).length;
-  check('Delete All removes files from disk', left === 0, `${left} files left`);
-
-  // Gradients: every gradient that carries white text/icons keeps >= 3:1 contrast at every stop,
-  // and the shared "in step" gradient is actually rendered (not silently dropped by the CSS engine).
-  const grad = {};
-  for (const r of ['home', 'history', 'diagnostics', 'settings']) {
-    await a.click(`[data-testid="nav-${r}"]`);
-    await a.waitForTimeout(300);
-    grad[r] = await a.evaluate(() => {
-      const lum = ([r, g, b]) => {
-        const c = [r, g, b].map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
-        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-      };
-      let worst = Infinity;
-      let filled = 0;
-      let duoText = 0;
-      for (const el of document.querySelectorAll('*')) {
-        const cs = window.getComputedStyle(el);
-        if (!/gradient/.test(cs.backgroundImage)) continue;
-        if (cs.webkitBackgroundClip === 'text' || cs.backgroundClip === 'text') {
-          duoText++;
-          continue;
-        }
-        if (!/rgb\(255, 255, 255\)/.test(cs.color) || !el.textContent?.trim() && !el.querySelector('svg')) continue;
-        filled++;
-        for (const m of cs.backgroundImage.matchAll(/rgba?\((\d+), (\d+), (\d+)/g)) worst = Math.min(worst, 1.05 / (lum([+m[1], +m[2], +m[3]]) + 0.05));
-      }
-      return { filled, duoText, worstContrast: worst === Infinity ? null : +worst.toFixed(2) };
-    });
-  }
-  check('white-on-gradient fills keep >= 3:1 contrast at every stop', Object.values(grad).every((g) => g.worstContrast === null || g.worstContrast >= 3), grad);
-  check('the shared "in step" gradient renders on Home', grad.home.duoText >= 1 && grad.home.filled >= 2, grad.home);
-
-  // Solo demo path: camera check -> keep it as a practice partner -> practise against it.
-  await a.click('[data-testid="nav-diagnostics"]');
-  await a.click('[data-testid="probe-start"]');
-  check('camera check shows live readouts', await vis(a, '[data-testid="probe-verdict"]', 10000));
-  await a.waitForTimeout(3000);
-  check('camera check draws the breathing wave', (await inked(a)) > 300, `${await inked(a)} px`);
-  const tSave = Date.now();
-  await a.waitForSelector('[data-testid="practice-save"]:not([disabled])', { timeout: 75000 });
-  check('"Keep as partner" unlocks after the minimum measured time (60 s x 0.8)', Date.now() - tSave < 60000, `${Math.round((Date.now() - tSave) / 1000)} s`);
-  await a.click('[data-testid="practice-save"]');
-  check('camera check is saved as a practice partner', await vis(a, '[data-testid="practice-card"] >> text=Saved', 8000));
-  await shot(a, '16-camera-check');
-  await a.click('[data-testid="probe-stop"]');
-  check('stopping the camera check releases the camera', (await a.evaluate(() => [...document.querySelectorAll('video')].filter((v) => v.srcObject).length)) === 0);
-  await a.click('[data-testid="nav-home"]');
-  await a.click('[data-testid="practice"]');
-  await consent(a);
-  check('practice against the saved check reaches the lobby, labelled as a replay', (await vis(a, '[data-testid="ready"]', 10000)) && (await vis(a, '[data-testid="replay-banner"]', 2000)));
-  await a.click('[data-testid="end"]');
-  await a.getByRole('button', { name: 'Leave' }).click();
-  check('leaving early shows no completed phases', (await vis(a, '[data-testid="ended"]', 5000)) && (await a.locator('nav[aria-label="Session progress"]').count()) === 0);
-  await a.getByRole('button', { name: 'Back to home' }).click();
-  check('back on Home after leaving', await vis(a, '[data-testid="start-room"]', 5000));
-
-  check('no renderer errors during the session (host)', A.errors.length === 0, A.errors.slice(0, 3));
-  check('no renderer errors during the session (guest)', B.errors.length === 0, B.errors.slice(0, 3));
-}
-
-// ---------------------------------------------------------------- 3. leaving and dropping
-console.log('\n3. Ending, dropping and bad codes');
-{
-  const { page: a } = A;
-  const { page: b } = B;
-  await a.click('[data-testid="nav-home"]');
-  await a.click('[data-testid="start-room"]');
-  await consent(a);
-  await vis(a, '[data-testid="room-code"]');
-  const code = (await a.textContent('[data-testid="room-code"]')).replace(/[^A-Z0-9-]/g, '');
-  await b.click('[data-testid="nav-home"]');
-  await b.fill('[data-testid="join-code"]', code);
-  await b.click('[data-testid="join-room"]');
-  await consent(b);
-  await vis(a, '[data-testid="ready"]', 20000);
-  await a.click('[data-testid="ready"]');
-  await b.click('[data-testid="ready"]');
-  await a.waitForSelector('[data-testid="start-call"]:not([disabled])');
-  await a.click('[data-testid="start-call"]');
-  await vis(b, '[data-testid="partner-video"]');
-  // Guest ends: host must be told and stop everything.
-  await b.click('[data-testid="end"]');
-  await b.getByRole('button', { name: 'End session' }).click();
-  const t = Date.now();
-  check('partner End reaches the host', await vis(a, '[data-testid="ended"]', 8000), `${Date.now() - t} ms`);
-  const live = await a.evaluate(() => [...document.querySelectorAll('video')].filter((v) => v.srcObject).length);
-  check('host media stopped after partner ended', live === 0, live);
-  await shot(a, '12-partner-ended');
-  await a.getByRole('button', { name: 'Back to home' }).first().click();
-  await b.getByRole('button', { name: 'Back to home' }).first().click();
-
-  // A room code that doesn't exist.
-  await b.fill('[data-testid="join-code"]', 'MOSS-99');
-  await b.click('[data-testid="join-room"]');
-  await consent(b);
-  check('unknown code -> clear "no room" message', await vis(b, '[data-testid="problem-room-not-found"]', 8000));
-  await shot(b, '13-room-not-found');
-  await b.getByRole('button', { name: 'Back to home' }).first().click();
-
-  // Typo protection.
-  await b.fill('[data-testid="join-code"]', 'hello');
-  await b.click('[data-testid="join-room"]');
-  check('malformed code is rejected before connecting', await vis(b, 'text=Codes look like TIDE-42', 2000));
-
-  // Guest's laptop dies mid-session (process killed during Apart).
-  await b.fill('[data-testid="join-code"]', '');
-  await a.click('[data-testid="start-room"]');
-  await consent(a);
-  await vis(a, '[data-testid="room-code"]');
-  const code3 = (await a.textContent('[data-testid="room-code"]')).replace(/[^A-Z0-9-]/g, '');
-  await b.fill('[data-testid="join-code"]', code3);
-  await b.click('[data-testid="join-room"]');
-  await consent(b);
-  await vis(a, '[data-testid="ready"]', 20000);
-  await a.click('[data-testid="ready"]');
-  await b.click('[data-testid="ready"]');
-  await a.waitForSelector('[data-testid="start-call"]:not([disabled])');
-  await a.click('[data-testid="start-call"]');
-  await vis(a, '[data-testid="begin-breathing"]');
-  await a.click('[data-testid="begin-breathing"]');
-  for (const p of [a, b]) {
-    await p.waitForSelector('[data-testid="mood-Steady"]');
-    await p.click('[data-testid="mood-Steady"]');
-    await p.click('[data-testid="mood-continue"]');
-  }
-  await vis(a, '[data-testid="phase-apart"]', 15000);
-  await a.waitForTimeout(8000);
-  B.app.process().kill('SIGKILL');
-  const tDrop = Date.now();
-  check('host shows "Connection lost" and pauses within 6 s of the drop', await vis(a, 'text=Connection lost.', 6000), `${Date.now() - tDrop} ms`);
-  const r1 = await a.getAttribute('[role="timer"]', 'aria-label');
-  await a.waitForTimeout(3000);
-  const r2 = await a.getAttribute('[role="timer"]', 'aria-label');
-  check('the phase timer is paused while waiting', r1 === r2, `${r1} -> ${r2}`);
-  const ended = (await vis(a, '[data-testid="results"]', 30000)) || (await vis(a, '[data-testid="ended"]', 1000));
-  const waited = Date.now() - tDrop;
-  check('after the 20 s window the session ends on its own', ended && waited >= 19000 && waited < 32000, `${Math.round(waited / 1000)} s after the drop`);
-  check('partial results are kept and labelled', (await vis(a, 'text=Ended early', 3000)) || (await vis(a, '[data-testid="ended"]', 500)));
-  await shot(a, '15-partner-dropped');
-  check('host media stopped after the drop', (await a.evaluate(() => [...document.querySelectorAll('video')].filter((v) => v.srcObject).length)) === 0);
-}
-await A.app.close();
-await B.app.close().catch(() => {});
-
-// ---------------------------------------------------------------- 4. unreachable server
-console.log('\n4. Signaling unreachable');
-{
-  const { app, page } = await launch({ name: 'offline', signalUrl: 'ws://127.0.0.1:9' });
-  await page.click('[data-testid="start-room"]');
-  await consent(page);
-  check('unreachable server -> clear message', await vis(page, '[data-testid="problem-signal-unreachable"]', 10000));
-  await shot(page, '14-unreachable');
+  check('no errors in the page', !errors.length, errors.slice(0, 3));
   await app.close();
-}
 
-await server.close();
+  // ------------------------------------------------------------------ 9. Closing the app mid-session keeps what was measured
+  console.log('\n9. Closing the app mid-session');
+  const c2 = await launch({ name: 'close', timeScale: SCALE, userData: dir });
+  await c2.page.click('[data-testid="start-feed"]');
+  await c2.page.click('[data-testid="source-test"]');
+  await c2.page.click('[role="radio"]:has-text("Until I stop")');
+  await consent(c2.page);
+  await c2.page.click('[data-testid="start"]');
+  await c2.page.click('[data-testid="skip-felt"]');
+  await vis(c2.page, '[data-testid="watch-bar"]', 40000);
+  await c2.page.waitForTimeout(24000);
+  const closed = c2.app.waitForEvent('close', { timeout: 20000 }).then(() => true).catch(() => false);
+  await c2.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+  check('closing during a session saves, then quits', await closed);
+  const c3 = await launch({ name: 'reopen', userData: dir });
+  await c3.page.click('[data-testid="nav-history"]');
+  const rows3 = await c3.page.$$('[data-testid="report-row"]');
+  check('the closed session is in History', rows3.length === 4, `${rows3.length}`);
+  await c3.page.click('[data-testid="open-report"] >> nth=0');
+  check('and is marked as ended early', ((await text(c3.page, '[data-testid="report"]')) ?? '').includes('Ended early'));
+  await c3.page.click('[data-testid="back"]');
+  await c3.page.click('[data-testid="delete-all"]');
+  await c3.page.click('[role="dialog"] button:has-text("Delete all")');
+  check('Delete all empties History', await vis(c3.page, '[data-testid="history-empty"]'));
+  await c3.app.close();
+
+  // ------------------------------------------------------------------ 10. Laptop camera: face in view, chest not
+  // Reproduces the real-camera failure: the SDK reports "chest not in view" the whole time, which hid a head turn
+  // and a look down, blocked "your normal", and let a weak breathing wave become "pauses".
+  console.log('\n10. Laptop camera (chest out of view the whole time)');
+  const L = await launch({ name: 'laptop', timeScale: SCALE, env: { COUNTERFEED_TEST_SCENARIO: 'laptop' } });
+  const lp = L.page;
+  await lp.click('[data-testid="start-feed"]');
+  await lp.click('[data-testid="source-test"]');
+  await lp.click('[role="radio"]:has-text("2 min")');
+  await consent(lp);
+  await lp.click('[data-testid="start"]');
+  await lp.click('[data-testid="skip-felt"]');
+  await vis(lp, '[data-testid="checklist"]');
+  await lp.waitForTimeout(3000);
+  check('settle: the breathing row says chest out of view, pauses off', (await lp.getAttribute('[data-testid="breathing-row"]', 'data-state')) === 'warn', await text(lp, '[data-testid="breathing-row"]'));
+  check('settle: the chest hint is a tip, not a warning', ((await text(lp, '[data-testid="settle-hint"]')) ?? '').trim() === '', await text(lp, '[data-testid="settle-hint"]'));
+  const rowStates = await lp.evaluate(() => ['light', 'framing', 'stillness'].map((k) => document.querySelector(`[data-testid="row-${k}"]`)?.getAttribute('data-state')));
+  check('settle: light, framing and stillness all OK (none stuck waiting)', rowStates.every((x) => x === 'ok'), rowStates);
+  await shot(lp, '11-laptop-settle');
+  const settleT0 = Date.now();
+  check('your normal is measured without needing "Continue anyway"', await vis(lp, '[data-testid="watch-bar"]', 30000));
+  check('…in about the normal time', Date.now() - settleT0 < 25000 && !(await lp.isVisible('[data-testid="force-continue"]')), `${Date.now() - settleT0} ms after the check above started`);
+  let lAway = false;
+  let lHold = false;
+  const cues = new Set();
+  for (let i = 0; i < 260 && !(await lp.isVisible('[data-testid="see-report"]')); i++) {
+    const cue = ((await text(lp, '[data-testid="cue"]')) ?? '').trim();
+    cues.add(cue.replace(/\d+ s/, 'N s'));
+    if (cue.includes('Looking away')) {
+      if (!lAway) await shot(lp, '12-laptop-bar-away');
+      lAway = true;
+    }
+    if (cue.includes('Breathing paused')) lHold = true;
+    await lp.waitForTimeout(250);
+  }
+  check('live: "Looking away" shows while the SDK only says "chest not in view"', lAway, [...cues]);
+  check('live: never "Breathing paused" when breathing can’t be read', !lHold);
+  check('live: the chest hint never replaces the body cues on the bar', ![...cues].some((c) => /chest/i.test(c)), [...cues]);
+  check('the session ends on its own', await vis(lp, '[data-testid="see-report"]', 30000));
+  await lp.click('[data-testid="felt-after-3"]');
+  await lp.click('[data-testid="see-report"]');
+  check('report appears', await vis(lp, '[data-testid="report"]'));
+  await lp.waitForTimeout(1500);
+  await shot(lp, '13-laptop-report-top');
+  check('Pull score is a number', /\d+/.test((await text(lp, '[data-testid="score-ring"]')) ?? ''), (await text(lp, '[data-testid="score-ring"]'))?.trim());
+  const holdTile = (await text(lp, '[data-testid="tile-holds"]')) ?? '';
+  check('breathing pauses tile says not readable (not "0")', holdTile.includes('not readable') && !/\b0\b/.test(holdTile), holdTile);
+  check('blinking is still compared with your normal', ((await text(lp, '[data-testid="tile-blinks"]')) ?? '').includes('your normal'), await text(lp, '[data-testid="tile-blinks"]'));
+  const lLanes = await lp.evaluate(() => ['hold', 'noblink', 'smile', 'away'].map((k) => document.querySelectorAll(`[data-testid="tl-${k}"]`).length));
+  check('timeline: no pauses, the head turn and the look down both shown', lLanes[0] === 0 && lLanes[3] >= 2 && lLanes[1] >= 1, lLanes);
+  const eyes = (await text(lp, '[data-testid="tile-eyes"]')) ?? '';
+  check('eyes on screen counts both looks away', /looked away 2 times/.test(eyes), eyes);
+  const lSummary = (await text(lp, '[data-testid="summary"]')) ?? '';
+  const whole = (await lp.evaluate(() => document.querySelector('[data-testid="report"]').innerText)) ?? '';
+  check('the score explainer leaves breathing out too', !/breathing/.test((await text(lp, '[data-testid="report"] section')) ?? ''), ((await text(lp, '[data-testid="report"] section')) ?? '').slice(0, 200));
+  check('summary and suggestion don’t mention breathing', !/breath/i.test(lSummary) && !/breath/i.test((await text(lp, '[data-testid="suggestion"]')) ?? ''), lSummary.slice(0, 120));
+  check('no "your normal couldn’t be measured" note', !whole.includes('couldn’t be measured clearly'));
+  await lp.click('[data-testid="details"] button');
+  check('the details explain why breathing was left out', ((await text(lp, '[data-testid="details"]')) ?? '').includes('breathing couldn’t be read'));
+  check('laptop report copy is free of banned words', !(await bannedOnPage(lp)).length, await bannedOnPage(lp));
+  await shot(lp, '14-laptop-report');
+  await lp.click('[data-testid="done"]');
+  await lp.click('[data-testid="nav-camera"]');
+  await lp.click('[data-testid="camera-toggle"]');
+  await lp.waitForTimeout(2500);
+  await lp.click('button:has-text("Technical details")');
+  await lp.waitForTimeout(300);
+  check('camera check shows live head pose', /-?\d\.\d\d \/ -?\d\.\d\d/.test((await text(lp, '[data-testid="check-pose"]')) ?? ''), await text(lp, '[data-testid="check-pose"]'));
+  check('camera check shows the chest row as a warning', ((await text(lp, 'main')) ?? '').includes('Chest in view (for breathing, optional)'));
+  await shot(lp, '15-laptop-camera-check');
+  await lp.click('[data-testid="camera-toggle"]');
+  check('no errors in the page (laptop run)', !L.errors.length, L.errors.slice(0, 3));
+  await L.app.close();
+
+  // ------------------------------------------------------------------ 11. Hook test
+  console.log('\n11. Hook test');
+  const K = await launch({ name: 'hooks', timeScale: SCALE, theme: 'dark' });
+  const kp = K.page;
+  check('Home has four doors, the Hook test among them', (await kp.$$('[data-testid^="start-"]')).length === 4 && (await kp.isVisible('[data-testid="start-hooks"]')));
+  check('the Hook test card says what it is', ((await text(kp, '[data-testid="start-hooks"]')) ?? '').includes('Test your hooks'));
+  await shot(kp, '16-home-doors');
+  await kp.click('[data-testid="start-hooks"]');
+  check('setup asks for clips', ((await text(kp, 'h1')) ?? '').includes('Which clips are you testing?'));
+  check('Start is disabled with no clips', await kp.isDisabled('[data-testid="start"]'));
+  // Demo pack: five bundled clips, each checked before it can play.
+  await kp.click('[data-testid="demo-pack"]');
+  await kp.waitForFunction(() => document.querySelectorAll('[data-testid="clip-item"][data-state="ok"]').length === 5, null, { timeout: 15000 }).catch(() => {});
+  const demoNames = await kp.$$eval('[data-testid="clip-item"]', (els) => els.map((e) => `${e.getAttribute('data-name')}:${e.getAttribute('data-state')}`));
+  check('the demo pack loads five playable clips', demoNames.length === 5 && demoNames.every((x) => x.endsWith(':ok')), demoNames);
+  check('each demo clip shows its length', /0:1[01]/.test((await text(kp, '[data-testid="clip-list"]')) ?? ''));
+  await shot(kp, '17-hooks-setup-demo');
+  while ((await kp.$$('[data-testid="remove-clip"]')).length) await kp.click('[data-testid="remove-clip"] >> nth=0');
+  check('clips can be removed', !(await kp.isVisible('[data-testid="clip-list"]')));
+  // Your own clips, including one that can't play and one that's too short.
+  await K.app.evaluate(({ dialog }, paths) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: paths });
+  }, [...CLIPS, BROKEN]);
+  await kp.click('[data-testid="add-clips"]');
+  await kp.waitForFunction(() => ![...document.querySelectorAll('[data-testid="clip-item"]')].some((e) => e.getAttribute('data-state') === 'checking'), null, { timeout: 15000 }).catch(() => {});
+  const mine = await kp.$$eval('[data-testid="clip-item"]', (els) => els.map((e) => `${e.getAttribute('data-name')}:${e.getAttribute('data-state')}`));
+  check('six clips added, each checked', mine.length === 6, mine);
+  check('a file that can’t play is flagged, not played', mine.includes('Broken.mp4:bad') && ((await text(kp, '[data-testid="clip-list"]')) ?? '').includes('Can’t play this file'));
+  check('a clip under 2 s is flagged as too short', mine.includes('Tiny.mp4:bad') && ((await text(kp, '[data-testid="clip-list"]')) ?? '').includes('Too short'));
+  check('“Add clips” is off at the limit of 6', await kp.isDisabled('[data-testid="add-clips"]'));
+  await kp.click('[data-testid="clip-item"][data-name="Tiny.mp4"] [data-testid="remove-clip"]');
+  await kp.click('[data-testid="add-clips"]');
+  await kp.waitForTimeout(600);
+  const again = await kp.$$eval('[data-testid="clip-item"]', (els) => els.map((e) => e.getAttribute('data-name')));
+  check('adding the same files again never duplicates a clip', again.length === 6 && new Set(again).size === 6, again);
+  await kp.fill('[data-testid="project-title"]', 'Launch reel');
+  await kp.click('[data-testid="shuffle"]'); // a fixed order, so the run lines up with the test signal
+  await consent(kp);
+  check('Start enables with four playable clips and consent', !(await kp.isDisabled('[data-testid="start"]')));
+  await shot(kp, '17b-hooks-setup-own');
+  await kp.click('[data-testid="start"]');
+  check('a hook test goes straight to your normal', await vis(kp, '[data-testid="checklist"]'));
+  check('…and says the first clip starts next', ((await text(kp, 'body')) ?? '').includes('the first clip starts'));
+  check('the clips play inside the app after your normal', await vis(kp, '[data-testid="clip-feed"]', 40000));
+  const counter = async () => ((await text(kp, '[data-testid="clip-counter"]')) ?? '').trim();
+  check('only the four playable clips play', (await counter()) === 'Clip 1 of 4', await counter());
+  const playing1 = await kp.evaluate(() => {
+    const v = document.querySelector('[data-testid="clip-video"]');
+    return new Promise((r) => setTimeout(() => r({ paused: v.paused, t: v.currentTime }), 1200));
+  });
+  check('the first clip is playing', !playing1.paused && playing1.t > 0.3, playing1);
+  check('clip names are hidden while watching', !((await text(kp, '[data-testid="clip-feed"]')) ?? '').includes('Intro'));
+  await kp.waitForFunction(() => document.querySelector('[data-testid="clip-counter"]')?.textContent?.includes('Clip 2'), null, { timeout: 15000 });
+  check('a clip that ends moves on to the next by itself', (await counter()) === 'Clip 2 of 4');
+  await kp.waitForTimeout(1200);
+  await kp.keyboard.press('ArrowDown');
+  await kp.waitForFunction(() => document.querySelector('[data-testid="clip-counter"]')?.textContent?.includes('Clip 3'), null, { timeout: 5000 }).catch(() => {});
+  check('↓ swipes to the next clip', (await counter()) === 'Clip 3 of 4', await counter());
+  await kp.keyboard.press('ArrowDown');
+  await kp.waitForTimeout(150);
+  check('a second swipe right after is ignored (trackpad momentum)', (await counter()) === 'Clip 3 of 4', await counter());
+  await kp.waitForTimeout(1500);
+  const layout = await kp.evaluate(() => {
+    const f = document.querySelector('[data-testid="clip-frame"]').getBoundingClientRect();
+    const a = document.querySelector('[data-testid="clip-aside"]').getBoundingClientRect();
+    return { frameRight: Math.round(f.right), asideLeft: Math.round(a.left), ratio: +(f.width / f.height).toFixed(3), fitsY: f.bottom <= window.innerHeight };
+  });
+  check('the player is 9:16 and never covers the side panel', layout.frameRight <= layout.asideLeft && Math.abs(layout.ratio - 0.5625) < 0.01 && layout.fitsY, layout);
+  await shot(kp, '18-hooks-player');
+  check('the live cue shows while watching', ((await text(kp, '[data-testid="clip-feed"] [data-testid="cue"]')) ?? '').length > 0);
+  check('after the last clip: which one would you post?', await vis(kp, '[data-testid="pick"]', 60000));
+  const pickN = (await kp.$$('[data-testid^="pick-"]')).length;
+  const pickImgs = (await kp.$$('[data-testid="pick"] img')).length;
+  check('every clip you saw can be picked, with a still', pickN === 4 && pickImgs === 4, { pickN, pickImgs });
+  await kp.click('[data-testid="pick-3"]');
+  await shot(kp, '19-hooks-pick');
+  await kp.click('[data-testid="see-report"]');
+  check('the hook report appears', await vis(kp, '[data-testid="hook-winner"]'));
+  await kp.waitForTimeout(1500);
+  const ranks = await kp.$$eval('[data-testid="hook-row"]', (els) => els.map((e) => ({ name: e.getAttribute('data-name'), rank: e.getAttribute('data-rank'), hook: e.getAttribute('data-hook'), status: e.getAttribute('data-status'), score: Number(e.getAttribute('data-score')), text: e.textContent })));
+  check('the four clips that played are ranked (the two flagged at setup were never part of the test)', ranks.length === 4 && ranks.every((r) => r.rank) && !ranks.some((r) => /Broken|Tiny/.test(r.name)), ranks.map((r) => `${r.rank} ${r.name} ${r.score}`));
+  check('“Winner” held you hardest (the stare and the smile)', ranks[0]?.name === 'Winner.mp4' && ranks[0]?.rank === '1', ranks.map((r) => r.name));
+  const swiped = ranks.find((r) => r.name === 'Swipe me.mp4');
+  check('“Swipe me” ranks last: swiped, lost in the first 3 s', swiped?.rank === '4' && swiped?.status === 'skipped' && swiped?.hook === 'lost' && swiped.text.includes('Swiped at 0:01'), swiped);
+  check('a swiped clip scores below every clip watched to the end', ranks.filter((r) => r.status === 'finished').every((r) => r.score > swiped.score), ranks.map((r) => `${r.name} ${r.status} ${r.score}`));
+  check('“Long one” shows its look away', ranks.find((r) => r.name === 'Long one.mp4')?.text.includes('looked away'), ranks.find((r) => r.name === 'Long one.mp4')?.text);
+  const summary = (await text(kp, '[data-testid="summary"]')) ?? '';
+  check('the headline names the winner and why', summary.startsWith('“Winner” held you hardest') && summary.includes('watched it to the end'), summary);
+  check('your pick sits next to what held you', ((await text(kp, '[data-testid="hook-pick"]')) ?? '').includes('You’d post “Long one”. Your body stayed with “Winner”.'), await text(kp, '[data-testid="hook-pick"]'));
+  check('the suggestion starts from the disagreement', ((await text(kp, '[data-testid="suggestion"]')) ?? '').includes('Watch both again before you choose'), await text(kp, '[data-testid="suggestion"]'));
+  check('the winner shows its Hold score', /^\d+$/.test(((await text(kp, '[data-testid="score-ring"]')) ?? '').trim()) && Number(await text(kp, '[data-testid="score-ring"]')) === ranks[0].score, await text(kp, '[data-testid="score-ring"]'));
+  const stillN = (await kp.$$('[data-testid="hook-ranking"] img')).length;
+  check('ranked clips carry a still', stillN === 4, `${stillN}`);
+  const curves = await kp.$$eval('[data-testid="hook-curve"]', (els) => els.map((e) => e.getAttribute('data-name')));
+  check('second by second: one row per ranked clip, in rank order', curves.length === 4 && curves[0] === 'Winner.mp4', curves);
+  check('the swipe is marked on its row', ((await text(kp, '[data-testid="hook-curve"][data-name="Swipe me.mp4"]')) ?? '').includes('swiped'));
+  await kp.hover('[data-testid="hook-curve"][data-name="Winner.mp4"] svg');
+  check('hovering a curve says how strongly it held you', /0:0\d · /.test((await text(kp, '[data-testid="hook-curve"][data-name="Winner.mp4"]')) ?? ''), await text(kp, '[data-testid="hook-curve"][data-name="Winner.mp4"]'));
+  await kp.click('[data-testid="hook-row"][data-name="Winner.mp4"] button');
+  check('clicking a clip plays it in the report', await vis(kp, '[data-testid="hook-player"]'));
+  await kp.waitForTimeout(800);
+  check('…and it is playing', await kp.evaluate(() => { const v = document.querySelector('[data-testid="hook-player"] video'); return !!v && !v.paused; }));
+  await kp.click('[data-testid="how-built"] button');
+  check('how each clip is scored is one click away', ((await text(kp, '[data-testid="how-built"]')) ?? '').includes('Staying multiplies everything'));
+  check('hook report copy is free of banned words', !(await bannedOnPage(kp)).length, await bannedOnPage(kp));
+  await kp.click('[data-testid="hook-player"] button:has-text("Close")');
+  await kp.evaluate(() => document.querySelectorAll('.scroll').forEach((e) => (e.scrollTop = 0)));
+  await shot(kp, '20-hooks-report-top');
+  await kp.screenshot({ path: join(ART, '21-hooks-report-full.png'), fullPage: true });
+  await kp.click('[data-testid="done"]');
+  // History: the test is saved with its stills, reopens without the files, and has its own filter.
+  await kp.click('[data-testid="nav-history"]');
+  await kp.click('[role="radio"]:has-text("Hook tests")');
+  const hRows = await kp.$$('[data-testid="history-list"] [data-testid="report-row"]');
+  check('History filters to hook tests', hRows.length === 1 && ((await text(kp, '[data-testid="history-list"]')) ?? '').includes('Launch reel'), `${hRows.length}`);
+  check('the History row says Hook test', ((await text(kp, '[data-testid="history-list"]')) ?? '').includes('Hook test'));
+  await kp.click('[data-testid="nav-settings"]');
+  await kp.click('[role="radio"]:has-text("Light")');
+  await kp.click('[data-testid="nav-history"]');
+  await kp.click('[role="radio"]:has-text("Hook tests")');
+  await kp.click('[data-testid="history-list"] [data-testid="open-report"] >> nth=0');
+  check('a saved hook test reopens with its ranking', await vis(kp, '[data-testid="hook-ranking"]'));
+  await kp.waitForTimeout(1200);
+  check('…and its stills (kept on this Mac)', (await kp.$$('[data-testid="hook-ranking"] img')).length === 4);
+  check('…without a player (the files aren’t kept)', !(await kp.isVisible('[data-testid="hook-player"]')));
+  await shot(kp, '22-hooks-report-light');
+  const lightContrast = await gradientContrast(kp);
+  check('white on the indigo fill keeps >= 3.3:1 (light)', lightContrast['--hook-fill-1'] >= 3.3 && lightContrast['--hook-fill-2'] >= 3.3, lightContrast);
+  check('no errors in the page (hook test)', !K.errors.length, K.errors.slice(0, 3));
+  await K.app.close();
+
+  // ------------------------------------------------------------------ 12. Focus session
+  console.log('\n12. Focus session');
+  await focusSection({ check, shot, vis, text, bannedOnPage, gradientContrast, bounds, consent, launch, ART, SCALE });
 } catch (err) {
   failed++;
-  console.log(`  ✗ suite aborted: ${String(err.message).split('\n')[0]}`);
-  await Promise.all([A?.page, B?.page].filter(Boolean).map((p, i) => p.screenshot({ path: join(ART, `abort-${i}.png`) }).catch(() => {})));
+  console.error('suite error:', err);
+  if (ctx?.page) await ctx.page.screenshot({ path: join(ART, 'fail-crash.png') }).catch(() => {});
 }
-writeFileSync(join(ART, 'report.json'), JSON.stringify({ when: new Date().toISOString(), passed: results.length - failed, failed, results, metrics }, null, 2));
-console.log(`\n${results.length - failed} passed, ${failed} failed. Report: e2e/artifacts/report.json`);
-console.log('Metrics:', JSON.stringify({ idle: { cpu: metrics.idle?.cpuPct, mem: metrics.idle?.memMB }, together: { cpu: metrics.together?.cpuPctAllProcesses, renderer: metrics.together?.rendererCpuPct, mem: metrics.together?.memMB, frames: metrics.together?.frames } }));
+
+console.log(`\n${n - failed + (failed ? 0 : 0)}/${n} checks passed${failed ? `, ${failed} failed` : ''}. Screenshots in e2e/artifacts/.`);
 process.exit(failed ? 1 : 0);

@@ -1,45 +1,42 @@
-import { app, BrowserWindow, nativeTheme, session, shell } from 'electron';
+import { app, BrowserWindow, nativeTheme, protocol, screen, session, shell, type Rectangle } from 'electron';
 import { join, resolve } from 'node:path';
-import { readDotEnv } from './config';
-import { SignalManager } from './signal';
+import { readDotEnv, shortcutsBin } from './config';
+import { Dnd } from './mac';
 import { registerIpc } from './ipc';
+import { MEDIA_SCHEME, MediaRegistry } from './media';
 import { Storage } from './storage';
+import { CLOSE_REQUEST } from '../shared/ipc';
 
 /*
- * Together: main process.
- *  - One window; the renderer runs the SmartSpectra renderer SDK, the call and all analysis.
- *  - bindSmartSpectraIpc wires the SDK's private MessagePort channel to its native runtime here.
+ * Counterfeed: main process.
+ *  - One window. The renderer runs the SmartSpectra renderer SDK, screen capture of the chosen window, and all
+ *    analysis. bindSmartSpectraIpc wires the SDK's private MessagePort channel to its native runtime here.
  *  - The API key is read here (.env or Keychain) and handed to the renderer once, via getConfig.
+ *  - While you scroll another app, the window shrinks to a small always-on-top bar (setCompact).
  */
 
-const PEER2 = process.env.TOGETHER_PEER === '2' || process.argv.includes('--together-peer2');
 // The e2e seam can never switch on in a packaged build.
-const E2E = process.env.TOGETHER_E2E === '1' && !app.isPackaged;
-
-// Separate profiles: peer2 and every e2e instance get their own userData (and so their own sessions).
-const MAIN_PROFILE = join(app.getPath('appData'), 'Together');
-if (E2E && process.env.TOGETHER_USER_DATA) app.setPath('userData', resolve(process.env.TOGETHER_USER_DATA));
-else if (PEER2) app.setPath('userData', join(app.getPath('appData'), 'Together (peer 2)'));
-else app.setPath('userData', MAIN_PROFILE);
+const E2E = process.env.COUNTERFEED_E2E === '1' && !app.isPackaged;
+if (E2E && process.env.COUNTERFEED_USER_DATA) app.setPath('userData', resolve(process.env.COUNTERFEED_USER_DATA));
+else app.setPath('userData', join(app.getPath('appData'), 'Counterfeed'));
 
 // A packaged app loads SmartSpectra's native closure from resources/smartspectra/, because a .dylib cannot be
-// dlopen'd from inside app.asar (Presage electron-quickstart main.js). Set unconditionally so it can't be redirected.
+// dlopen'd from inside app.asar (Presage electron-quickstart main.js).
 if (app.isPackaged) {
   const lib = { darwin: 'libsmartspectra_capi.dylib', win32: 'smartspectra_capi.dll', linux: 'libsmartspectra_capi.so' }[process.platform as string];
   if (lib) process.env.SMARTSPECTRA_CAPI_PATH = join(process.resourcesPath, 'smartspectra', lib);
 }
 
-if (E2E) {
-  // Tests only: Chromium's built-in fake camera/mic feed the *call* media. Sensing is stubbed in e2e,
-  // so no synthetic video ever reaches the SmartSpectra SDK.
-  app.commandLine.appendSwitch('use-fake-device-for-media-stream');
-  app.commandLine.appendSwitch('use-fake-ui-for-media-stream');
-}
+protocol.registerSchemesAsPrivileged([{ scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true } }]);
 
-if (!E2E && !PEER2 && !app.requestSingleInstanceLock()) app.quit();
+if (!E2E && !app.requestSingleInstanceLock()) app.quit();
 
 const DEV_URL = process.env.ELECTRON_RENDERER_URL;
+const media = new MediaRegistry();
 let win: BrowserWindow | null = null;
+let busy = false;
+let closing = false;
+let normalBounds: Rectangle | null = null;
 
 function isOwnOrigin(url: string): boolean {
   if (!url) return false;
@@ -58,28 +55,56 @@ async function bindSdk(w: BrowserWindow) {
     });
   } catch (err) {
     // The renderer surfaces this as "measurement unavailable" when start() times out.
-    console.error('[together] SmartSpectra native runtime failed to load:', (err as Error).message);
+    console.error('[counterfeed] SmartSpectra native runtime failed to load:', (err as Error).message);
+  }
+}
+
+const MIN = { width: 1040, height: 700 };
+const BAR = { width: 380, height: 112 };
+
+/** Small always-on-top bar in the top-right of the current display, so it never covers the feed. */
+function setCompact(on: boolean) {
+  const w = win;
+  if (!w) return;
+  if (on) {
+    if (!normalBounds) normalBounds = w.getBounds();
+    const area = screen.getDisplayMatching(w.getBounds()).workArea;
+    w.setMinimumSize(BAR.width, BAR.height);
+    w.setBounds({ x: area.x + area.width - BAR.width - 16, y: area.y + 16, width: BAR.width, height: BAR.height }, true);
+    w.setResizable(false);
+    w.setAlwaysOnTop(true, 'floating');
+    w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (process.platform === 'darwin') w.setWindowButtonVisibility(false);
+  } else {
+    w.setAlwaysOnTop(false);
+    w.setVisibleOnAllWorkspaces(false);
+    w.setResizable(true);
+    if (process.platform === 'darwin') w.setWindowButtonVisibility(true);
+    w.setMinimumSize(MIN.width, MIN.height);
+    if (normalBounds) w.setBounds(normalBounds, true);
+    normalBounds = null;
+    w.focus();
   }
 }
 
 function createWindow() {
   const w = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 980,
-    minHeight: 660,
+    width: 1320,
+    height: 860,
+    minWidth: MIN.width,
+    minHeight: MIN.height,
     show: false,
-    title: 'Together',
+    title: 'Counterfeed',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 18, y: 18 },
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c0b0a' : '#f3f1ed',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c0b0a' : '#f2f0ec',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
       spellcheck: false,
-      // A call must keep its clock-sync pings and signal batches on time when the window is behind others.
+      // Measurement and screen sampling must keep running while you look at another app.
       backgroundThrottling: false,
     },
   });
@@ -87,6 +112,13 @@ function createWindow() {
   if (!E2E) void bindSdk(w);
 
   w.once('ready-to-show', () => w.show());
+  // Closing during a session: let the page save what it has first, then it calls quit().
+  w.on('close', (e) => {
+    if (busy && !closing) {
+      e.preventDefault();
+      w.webContents.send(CLOSE_REQUEST);
+    }
+  });
   w.on('closed', () => (win = null));
 
   // Never navigate away from the bundled page or open other windows (they would inherit the camera grant).
@@ -99,38 +131,42 @@ function createWindow() {
   else void w.loadFile(join(__dirname, '../renderer/index.html'));
 }
 
-const signals = new SignalManager();
-let quitting = false;
-app.on('before-quit', (e) => {
-  if (quitting) return;
-  // Close the embedded server cleanly so the port is free for the next launch.
-  quitting = true;
-  e.preventDefault();
-  void Promise.race([signals.close(), new Promise((r) => setTimeout(r, 1500))]).finally(() => app.quit());
-});
-
 app.whenReady().then(async () => {
-  app.setName('Together');
+  app.setName('Counterfeed');
   if (!app.isPackaged && process.platform === 'darwin') app.dock?.setIcon(join(__dirname, '../../build/icon.png'));
-  // Peer 2 can't own the camera, so it replays a recording made by the main profile (read only).
-  const storage = new Storage(app.getPath('userData'), PEER2 && !E2E ? join(MAIN_PROFILE, 'recordings') : undefined);
+  const storage = new Storage(app.getPath('userData'));
   await storage.init();
 
+  protocol.handle(MEDIA_SCHEME, (req) => media.respond(req.url, req.headers.get('range')));
+
   const env = { ...readDotEnv([process.cwd(), join(process.cwd(), '..', '..'), app.getPath('userData')]), ...pick(process.env) };
-  // The app runs its own signaling server (not in automated runs, which start a real one per test).
+  // Do Not Disturb (focus sessions): put right a session that ended without turning it off, and always turn it off
+  // when Counterfeed quits.
+  const dnd = new Dnd(shortcutsBin({ e2e: E2E, packaged: app.isPackaged, platform: process.platform, env }), app.getPath('userData'));
+  void dnd.recover();
+  app.on('will-quit', () => dnd.offSync());
   registerIpc({
+    dnd,
     storage,
+    media,
     window: () => win,
-    base: { env, appVersion: app.getVersion(), peer2: PEER2, e2e: E2E, platform: process.platform },
-    signal: E2E ? undefined : signals,
+    // Shipped next to the app (electron-builder extraResources); in development, straight from the repo.
+    demoDir: app.isPackaged ? join(process.resourcesPath, 'demo-pack') : join(__dirname, '../../resources/demo-pack'),
+    base: { env, appVersion: app.getVersion(), e2e: E2E, packaged: app.isPackaged, platform: process.platform },
+    setCompact,
+    setBusy: (b) => (busy = b),
+    quit: () => {
+      closing = true;
+      app.quit();
+    },
   });
 
-  // Grant only camera+mic ('media'), only to our own page. Everything else is denied.
+  // Grant only the camera and screen capture ('media'), only to our own page. Everything else is denied.
   // (SmartSpectra docs/nodejs.md, Permission flow: "Grant only the camera, and only to your own bundled page".)
-  // Together also needs the microphone for the call, so audio is allowed alongside video.
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
     const url = details?.requestingUrl || wc?.getURL() || '';
-    callback(permission === 'media' && isOwnOrigin(url));
+    const audio = 'mediaTypes' in (details ?? {}) && (details as { mediaTypes?: string[] }).mediaTypes?.includes('audio');
+    callback(permission === 'media' && !audio && isOwnOrigin(url));
   });
   session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => permission === 'media' && isOwnOrigin(origin));
 
@@ -156,8 +192,8 @@ app.on('web-contents-created', (_e, wc) => {
 
 app.on('window-all-closed', () => app.quit());
 
-/** Only the variables Together reads; process.env as a whole is never forwarded. */
+/** Only the variables Counterfeed reads; process.env as a whole is never forwarded. */
 function pick(env: NodeJS.ProcessEnv): Record<string, string> {
-  const keys = ['SMARTSPECTRA_API_KEY', 'SIGNAL_URL', 'TURN_URL', 'TURN_USER', 'TURN_PASS', 'TOGETHER_PHASE_SCALE', 'TOGETHER_TEST_SEED'];
+  const keys = ['SMARTSPECTRA_API_KEY', 'COUNTERFEED_TIME_SCALE', 'COUNTERFEED_TEST_SCENARIO', 'COUNTERFEED_RECORD', 'COUNTERFEED_SHORTCUTS_BIN'];
   return Object.fromEntries(keys.filter((k) => env[k]).map((k) => [k, env[k]!]));
 }

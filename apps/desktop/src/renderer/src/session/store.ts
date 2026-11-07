@@ -1,125 +1,77 @@
 import { create } from 'zustand';
-import type { Moment, MoodWord, PhaseName, SessionRecord } from '@together/shared';
-import type { CallStats, LinkState } from '../call/PeerSession';
-import type { ClockEstimate } from '../link/clock';
-import type { Quality, SourceStatus } from '../sensing/types';
-import { initial, type Ctx } from './machine';
+import type { ContentKind, Mode, Report, Thumbs } from '@counterfeed/shared';
+import type { Quality, SensingProblem } from '../sensing/types';
 
-/** Things a person may need to act on. Each maps to plain words in ui/problems.ts. */
-export type Problem =
-  | 'invalid-key'
-  | 'no-key'
-  | 'credit'
-  | 'network'
-  | 'camera-denied'
-  | 'camera-busy'
-  | 'camera-missing'
-  | 'unavailable'
-  | 'low-frame-rate'
-  | 'failed'
-  | 'mic-denied'
-  | 'signal-unreachable'
-  | 'room-not-found'
-  | 'room-full'
-  | 'rate-limited'
-  | 'expired'
-  | 'ice-failed'
-  | 'recording-missing';
+export type Step = 'idle' | 'setup' | 'before' | 'settle' | 'watch' | 'after' | 'analyzing' | 'report' | 'problem';
 
-export interface PersonLive {
-  pulse: number | null;
-  pulseStable: boolean;
-  rate: number | null;
-  rateConf: number;
-  talking: boolean;
-  /** ms since the last signal frame arrived (partner), or since the last metric (you). */
-  ageMs: number | null;
+/** What the person chose on the setup screen. */
+export interface Plan {
+  mode: Mode;
+  content: { kind: ContentKind; id: string | null; name: string; app: string | null };
+  /** For a video review: the cfmedia:// URL main handed out for the picked file. */
+  videoUrl: string | null;
+  /** Timed session length; null = until you stop (capped at 30 min) or, for a video, its length. */
+  lengthMs: number | null;
+  nudges: boolean;
+  title: string | null;
+  /** Hook test: the clips, in the order they'll play (shuffled on start when `shuffle` is on). */
+  clips: PlanClip[];
+  shuffle: boolean;
+  /** Focus session: turn on Do Not Disturb (through the person's Shortcuts) for the session. */
+  dnd: boolean;
+  /** Focus session: note which app is in front, once a second (names only). */
+  trackApps: boolean;
 }
 
-export interface Live {
-  you: PersonLive & { quality: Quality | null; status: SourceStatus; breathingReady: boolean };
-  partner: PersonLive;
-  /** Live PLV over the last 30 s (Together only). */
-  sync: number | null;
-  /** How in step these two rhythms look by accident (circular-shift chance level, last 90 s). Together only. */
-  chance: number | null;
-  clock: ClockEstimate | null;
-  call: CallStats | null;
-  link: LinkState;
+/** A clip picked for a hook test. Duration and playability are checked on the setup screen. */
+export interface PlanClip {
+  url: string;
+  name: string;
+  durationMs: number | null;
+  /** 'checking' until its metadata loads; 'bad' if it can't play or its length is out of range. */
+  state: 'checking' | 'ok' | 'bad';
+  problem: string | null;
 }
 
-export interface OwnMoment {
-  moment: Moment | null;
-  /** Detected, waiting for the 15 s pulse check. */
-  pending: { id: string; kind: Moment['kind']; atMs: number; peak: number } | null;
-  shared: boolean;
+export type Problem = SensingProblem | 'video-error';
+
+/** A short live cue on the bar while you watch: the real-time response to your signals. */
+export interface LiveCue {
+  kind: 'hold' | 'noblink' | 'face' | 'measuring' | 'starting' | 'focus';
+  text: string;
 }
 
 export interface SessionState {
-  ctx: Ctx;
-  code: string | null;
-  problem: Problem | null;
-  /** Non-blocking notices (low frame rate, mic denied). */
-  notice: Problem | null;
-  sourceKind: 'camera' | 'replay' | 'test' | null;
-  partner: {
-    connected: boolean;
-    video: boolean;
-    replay: { recordedAt: number } | null;
-    sharesReactions: boolean;
-    ready: Partial<Record<PhaseName, boolean>>;
-    moods: { start: MoodWord | null; end: MoodWord | null };
-  };
-  you: {
-    ready: Partial<Record<PhaseName, boolean>>;
-    moods: { start: MoodWord | null; end: MoodWord | null };
-    shareMoods: boolean;
-    shareReactions: boolean;
-  };
-  streams: { local: MediaStream | null; remote: MediaStream | null };
-  mic: boolean;
-  camera: boolean;
-  recording: boolean;
-  /** Replay of your own signals (peer 2). */
-  selfReplay: { recordedAt: number } | null;
-  moments: OwnMoment[];
-  sharedWithMe: Moment[];
-  /** Call started at (local ms), for the elapsed clock. */
-  callStartedAt: number | null;
-  result: SessionRecord | null;
-  analyzing: boolean;
-  live: Live;
+  step: Step;
+  plan: Plan | null;
+  /** Settle: 0-1 of the time needed for your normal, and how long we've waited. */
+  settle: { progress: number; waitedMs: number; canForce: boolean };
+  quality: Quality | null;
+  preview: MediaStream | null;
+  watch: { elapsedMs: number; startedAt: number | null; captureLive: boolean; cue: LiveCue; nudge: boolean };
+  /** Hook test: which clip is playing (index into plan.clips). */
+  clip: number;
+  felt: { before: number | null; after: number | null };
+  problem: { kind: Problem; detail: string } | null;
+  report: Report | null;
+  thumbs: Thumbs;
+  /** Problems that happened during watching but still left enough for a report. */
+  endedBy: Problem | 'closed' | null;
 }
 
-const person = (): PersonLive => ({ pulse: null, pulseStable: false, rate: null, rateConf: 0, talking: false, ageMs: null });
-
-export const blankSession = (): SessionState => ({
-  ctx: initial(),
-  code: null,
+export const initialSession = (): SessionState => ({
+  step: 'idle',
+  plan: null,
+  settle: { progress: 0, waitedMs: 0, canForce: false },
+  quality: null,
+  preview: null,
+  watch: { elapsedMs: 0, startedAt: null, captureLive: false, cue: { kind: 'starting', text: 'Starting…' }, nudge: false },
+  clip: 0,
+  felt: { before: null, after: null },
   problem: null,
-  notice: null,
-  sourceKind: null,
-  partner: { connected: false, video: true, replay: null, sharesReactions: false, ready: {}, moods: { start: null, end: null } },
-  you: { ready: {}, moods: { start: null, end: null }, shareMoods: false, shareReactions: false },
-  streams: { local: null, remote: null },
-  mic: true,
-  camera: true,
-  recording: false,
-  selfReplay: null,
-  moments: [],
-  sharedWithMe: [],
-  callStartedAt: null,
-  result: null,
-  analyzing: false,
-  live: {
-    you: { ...person(), quality: null, status: 'off', breathingReady: false },
-    partner: person(),
-    sync: null,
-    chance: null,
-    clock: null,
-    call: null,
-    link: 'new',
-  },
+  report: null,
+  thumbs: {},
+  endedBy: null,
 });
 
-export const useSession = create<SessionState>(() => blankSession());
+export const useSession = create<SessionState>(() => initialSession());

@@ -8,13 +8,14 @@ import type { Plugin } from 'vite';
  * Content Security Policy for the renderer.
  * - worker-src blob: is required by SmartSpectra: "The renderer runs a Web Worker from a `blob:` URL.
  *   If your app sets a CSP, allow `blob:` in `worker-src`" (docs/nodejs.md, Content Security Policy).
- * - connect-src ws:/wss: for the signaling server (its URL is configurable).
+ * - media-src cfmedia: plays the demo video the person picked (main streams only that file).
+ * - mediastream: shows the camera preview and samples the chosen window (screen capture stays in memory).
  * - Dev additionally needs inline scripts and the Vite HMR socket for React Refresh.
  */
 function csp(): Plugin {
   let dev = false;
   return {
-    name: 'together-csp',
+    name: 'counterfeed-csp',
     configResolved(c) {
       dev = c.command === 'serve';
     },
@@ -25,9 +26,9 @@ function csp(): Plugin {
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob:",
         "font-src 'self' data:",
-        "media-src 'self' blob: mediastream:",
+        "media-src 'self' blob: mediastream: cfmedia:",
         "worker-src 'self' blob:",
-        'connect-src \'self\' ws: wss:',
+        dev ? "connect-src 'self' ws:" : "connect-src 'self'",
         "object-src 'none'",
         "base-uri 'none'",
         "form-action 'none'",
@@ -39,12 +40,11 @@ function csp(): Plugin {
 }
 
 // Workspace TypeScript and the SDK preload are bundled (a sandboxed preload can only require 'electron').
-const bundled = ['@together/shared', '@smartspectra/node-sdk'];
+const bundled = ['@counterfeed/shared', '@smartspectra/node-sdk'];
 
 export default defineConfig({
   main: {
-    // The signaling server (and ws) are bundled into main so the packaged app carries its own backend.
-    plugins: [externalizeDepsPlugin({ exclude: ['@together/shared', '@together/signal', 'ws'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@counterfeed/shared'] })],
     build: { minify: true, rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } } },
   },
   preload: {

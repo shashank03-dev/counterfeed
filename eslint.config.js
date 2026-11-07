@@ -19,6 +19,6 @@ export default tseslint.config(
   },
   {
     files: ['**/*.mjs', 'apps/desktop/e2e/**'],
-    languageOptions: { globals: { process: 'readonly', console: 'readonly', window: 'readonly', document: 'readonly', performance: 'readonly', requestAnimationFrame: 'readonly', PerformanceObserver: 'readonly', setTimeout: 'readonly', localStorage: 'readonly', navigator: 'readonly' } },
+    languageOptions: { globals: { process: 'readonly', console: 'readonly', window: 'readonly', document: 'readonly', performance: 'readonly', requestAnimationFrame: 'readonly', PerformanceObserver: 'readonly', setTimeout: 'readonly', localStorage: 'readonly', navigator: 'readonly', getComputedStyle: 'readonly', HTMLInputElement: 'readonly', Event: 'readonly' } },
   },
 );

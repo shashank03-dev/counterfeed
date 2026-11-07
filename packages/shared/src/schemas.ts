@@ -1,186 +1,263 @@
 import { z } from 'zod';
-import { MOOD_WORDS, ROOM_CODE_RE } from './words.ts';
 
-/* ---------------------------------------------------------------------------
- * Peer-to-peer data channel ("signals"). Only derived numbers cross the wire:
- * never video frames, never expression streams.
- * ------------------------------------------------------------------------- */
+/*
+ * Counterfeed's stored report. Everything here is derived numbers and short labels, computed on this Mac.
+ * No video, no audio, no face data, no camera frames. Pictures of the screen (thumbnails) are stored in a
+ * separate file next to the report and are never part of an export.
+ */
 
-const finite = z.number().finite();
-/** Microseconds since the Unix epoch on the SENDER's clock. */
-const micros = z.number().finite().nonnegative();
+const num = z.number().finite();
+const nnum = num.nullable();
+const ms = z.number().int().nonnegative().max(24 * 3_600_000);
+const thumbKey = z.string().regex(/^t[0-9]{1,4}$/);
 
-export const SignalFrameSchema = z
+/**
+ * feed: scroll a feed. review: judge a project. hooks: rank a few short clips by how strongly each held you.
+ * focus: work on one thing for a set time, and see how much of it your eyes stayed on the work (and in which apps).
+ */
+export const MODES = ['feed', 'review', 'hooks', 'focus'] as const;
+export const ModeSchema = z.enum(MODES);
+export type Mode = z.infer<typeof ModeSchema>;
+
+/** What was being watched. 'none' = no pictures (screen recording not allowed, or the person chose not to). */
+export const ContentKindSchema = z.enum(['window', 'screen', 'video', 'none', 'test']);
+export type ContentKind = z.infer<typeof ContentKindSchema>;
+
+export const EVENT_KINDS = ['hold', 'noblink', 'smile', 'surprise', 'frown', 'away'] as const;
+export const EventKindSchema = z.enum(EVENT_KINDS);
+export type EventKind = z.infer<typeof EventKindSchema>;
+
+export const ReportEventSchema = z
   .object({
-    t: micros,
-    trace: finite.optional(),
-    traceStable: z.boolean().optional(),
-    pulse: z.number().min(0).max(250).optional(),
-    pulseConf: z.number().min(0).max(100).optional(),
-    talking: z.boolean().optional(),
+    id: z.string().regex(/^[a-z0-9-]{1,40}$/),
+    kind: EventKindSchema,
+    /** Start, in ms from the start of watching. */
+    atMs: ms,
+    /** Position in the video (review of a video file), else null. */
+    contentMs: ms.nullable(),
+    durMs: ms,
+    /** Peak facial-expression probability 0-100 (smile/surprise/frown), else null. */
+    peak: z.number().min(0).max(100).nullable(),
+    /** Key of a stored thumbnail, if one was kept for this moment. */
+    thumb: thumbKey.nullable(),
   })
   .strict();
-export type SignalFrame = z.infer<typeof SignalFrameSchema>;
+export type ReportEvent = z.infer<typeof ReportEventSchema>;
 
-export const PHASES = ['lobby', 'call', 'moodStart', 'apart', 'together', 'moodEnd', 'results'] as const;
-export const PhaseNameSchema = z.enum(PHASES);
-export type PhaseName = z.infer<typeof PhaseNameSchema>;
-
-export const MomentKindSchema = z.enum(['smile', 'surprise']);
-export type MomentKind = z.infer<typeof MomentKindSchema>;
-
-export const MomentSchema = z
+/** Score parts. Focus sessions use eyes, unbroken, steady and blinking; the others use the first five. */
+export const PULL_PARTS = ['blinking', 'pauses', 'stare', 'eyes', 'time', 'unbroken', 'steady'] as const;
+export const PullPartSchema = z
   .object({
-    id: z.string().min(1).max(64),
-    /** Microseconds, sender clock. */
-    t: micros,
-    /** Offset from the start of the session, ms (what the person sees: "at 04:32"). */
-    atMs: z.number().int().nonnegative(),
-    kind: MomentKindSchema,
-    /** Peak smoothed facial-expression probability, 0-100. */
-    peak: z.number().min(0).max(100),
-    /** BPM change, or null when there was not enough stable pulse signal. */
-    pulseDelta: z.number().min(-200).max(200).nullable(),
+    key: z.enum(PULL_PARTS),
+    /** 0-1 contribution before weighting. */
+    value: z.number().min(0).max(1),
+    weight: z.number().min(0).max(1),
+    /** One plain sentence: what was measured. */
+    detail: z.string().max(200),
   })
   .strict();
-export type Moment = z.infer<typeof MomentSchema>;
+export type PullPart = z.infer<typeof PullPartSchema>;
 
-const id = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const rating = z.number().int().min(1).max(5).nullable();
 
-export const MsgSchema = z.discriminatedUnion('type', [
-  z
-    .object({
-      type: z.literal('hello'),
-      appVersion: z.string().max(32),
-      sharing: z.object({ expressions: z.boolean() }).strict(),
-      /** Set when the sender's signals come from a recording, never live. */
-      replay: z.object({ recordedAt: micros }).strict().nullable().optional(),
-      /** The sender has its camera off (e.g. a replay-only second instance). */
-      video: z.boolean().optional(),
-    })
-    .strict(),
-  z.object({ type: z.literal('ping'), id, t0: micros }).strict(),
-  z.object({ type: z.literal('pong'), id, t0: micros, t1: micros, t2: micros }).strict(),
-  z.object({ type: z.literal('sig'), frames: z.array(SignalFrameSchema).max(240) }).strict(),
-  z
-    .object({
-      type: z.literal('phase'),
-      name: PhaseNameSchema,
-      /** When both sides switch, in the HOST's clock (us). */
-      startAt: micros,
-      /** Time already spent in this phase before a pause (resume after a reconnect). */
-      elapsedMs: z.number().int().nonnegative().max(3_600_000).optional(),
-      /** Length of a timed phase, chosen by the host (Full or Short session). Guests follow it. */
-      durationMs: z.number().int().min(1_000).max(3_600_000).optional(),
-    })
-    .strict(),
-  z.object({ type: z.literal('ready'), phase: PhaseNameSchema, ready: z.boolean() }).strict(),
-  z.object({ type: z.literal('mood'), when: z.enum(['start', 'end']), label: z.enum(MOOD_WORDS) }).strict(),
-  z.object({ type: z.literal('moment'), moment: MomentSchema }).strict(),
-  z.object({ type: z.literal('bye'), reason: z.enum(['ended', 'closed']).optional() }).strict(),
-]);
-export type Msg = z.infer<typeof MsgSchema>;
-export type MsgOf<T extends Msg['type']> = Extract<Msg, { type: T }>;
+/** Hook test: up to this many clips in one session. */
+export const MAX_CLIPS = 6;
 
-/** Largest data channel message we accept, in bytes of JSON. */
-export const MAX_MSG_BYTES = 64 * 1024;
+/**
+ * The first 3 seconds of a clip. landed: it grabbed you within 3 s. slow: it grabbed you, later. steady: you stayed
+ * and faced it, nothing stood out. lost: you swiped or looked away within 3 s. unclear: not enough view to tell.
+ */
+export const HOOK_VERDICTS = ['landed', 'slow', 'steady', 'lost', 'unclear'] as const;
+export const CLIP_PARTS = ['stayed', 'eyes', 'stare', 'face'] as const;
 
-export function parseMsg(raw: string): Msg | null {
-  if (raw.length > MAX_MSG_BYTES) return null;
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  const r = MsgSchema.safeParse(json);
-  return r.success ? r.data : null;
-}
-
-/* ---------------------------------------------------------------------------
- * Signaling (desktop <-> apps/signal). The server relays only offer, answer,
- * ice and leave between the two people in a room, and stores nothing.
- * ------------------------------------------------------------------------- */
-
-const code = z.string().regex(ROOM_CODE_RE);
-const token = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
-const sdp = z.string().min(1).max(32 * 1024);
-const candidate = z
+export const ClipResultSchema = z
   .object({
-    candidate: z.string().max(1024),
-    sdpMid: z.string().max(64).nullable().optional(),
-    sdpMLineIndex: z.number().int().min(0).max(64).nullable().optional(),
-    usernameFragment: z.string().max(256).nullable().optional(),
+    /** Position in the order the clips were played (0-based). */
+    index: z.number().int().min(0).max(MAX_CLIPS - 1),
+    name: z.string().max(160),
+    durationMs: ms,
+    /** Time the clip was actually playing. */
+    watchedMs: ms,
+    /** finished: played to the end. skipped: swiped on. stopped: the session ended during it. */
+    status: z.enum(['finished', 'skipped', 'stopped', 'unwatched', 'failed']),
+    /** Position in the clip where you swiped or the session stopped. */
+    leftAtMs: ms.nullable(),
+    /** Hold score 0-100; null when the clip wasn't watched. */
+    score: z.number().int().min(0).max(100).nullable(),
+    rank: z.number().int().min(1).max(MAX_CLIPS).nullable(),
+    hook: z.enum(HOOK_VERDICTS),
+    /** Position where it first held you strongly (2 s or more), if it did. */
+    grabbedAtMs: ms.nullable(),
+    /** Strongest moment in the clip. */
+    bestMs: ms.nullable(),
+    awayMs: ms,
+    parts: z
+      .array(
+        z
+          .object({ key: z.enum(CLIP_PARTS), value: z.number().min(0).max(1), weight: z.number().min(0).max(1), detail: z.string().max(200) })
+          .strict(),
+      )
+      .max(CLIP_PARTS.length),
+    /** Attention along the clip, one value (0-1) per second; null where there was no clear view. */
+    curve: z.array(z.number().min(0).max(1).nullable()).max(400),
+    thumb: thumbKey.nullable(),
   })
   .strict();
+export type ClipResult = z.infer<typeof ClipResultSchema>;
 
-export const RelaySchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('offer'), sdp }).strict(),
-  z.object({ type: z.literal('answer'), sdp }).strict(),
-  z.object({ type: z.literal('ice'), candidate: candidate.nullable() }).strict(),
-  z.object({ type: z.literal('leave') }).strict(),
-]);
-export type Relay = z.infer<typeof RelaySchema>;
-
-export const ClientMsgSchema = z.union([
-  z.object({ type: z.literal('create') }).strict(),
-  z.object({ type: z.literal('join'), code }).strict(),
-  z.object({ type: z.literal('rejoin'), code, token }).strict(),
-  RelaySchema,
-]);
-export type ClientMsg = z.infer<typeof ClientMsgSchema>;
-
-export const SignalErrorCodeSchema = z.enum(['room-not-found', 'room-full', 'rate-limited', 'bad-message', 'not-in-room', 'expired']);
-export type SignalErrorCode = z.infer<typeof SignalErrorCodeSchema>;
-
-export const ServerMsgSchema = z.union([
-  z.object({ type: z.literal('created'), code, token }).strict(),
-  z.object({ type: z.literal('joined'), code, token }).strict(),
-  z.object({ type: z.literal('rejoined'), code, peerPresent: z.boolean() }).strict(),
-  z.object({ type: z.literal('peer-joined') }).strict(),
-  /** The other person's connection dropped; their seat is held until the room expires. */
-  z.object({ type: z.literal('peer-away') }).strict(),
-  z.object({ type: z.literal('peer-back') }).strict(),
-  z.object({ type: z.literal('error'), code: SignalErrorCodeSchema }).strict(),
-  RelaySchema,
-]);
-export type ServerMsg = z.infer<typeof ServerMsgSchema>;
-
-export const MAX_SIGNAL_BYTES = 40 * 1024;
-
-export function parseClientMsg(raw: string): ClientMsg | null {
-  return parseWith(ClientMsgSchema, raw, MAX_SIGNAL_BYTES);
-}
-export function parseServerMsg(raw: string): ServerMsg | null {
-  return parseWith(ServerMsgSchema, raw, MAX_SIGNAL_BYTES);
-}
-function parseWith<T>(schema: z.ZodType<T>, raw: string, max: number): T | null {
-  if (raw.length > max) return null;
-  try {
-    const r = schema.safeParse(JSON.parse(raw));
-    return r.success ? r.data : null;
-  } catch {
-    return null;
-  }
-}
-
-/* ---------------------------------------------------------------------------
- * Recordings (JSONL): line 1 is a header, then one line per outgoing batch or
- * phase mark. Only SignalFrames, never video or audio.
- * ------------------------------------------------------------------------- */
-
-export const RecordingHeaderSchema = z
+/** Focus session: an app's share of the session. Names only (from macOS), never what was in it. */
+export const MAX_FOCUS_APPS = 8;
+export const FocusAppSchema = z
   .object({
-    kind: z.literal('together-recording'),
+    /** App name as macOS reports it ("Code", "Safari"); "Other apps" folds in the rest. */
+    name: z.string().max(80),
+    /** Time this app was in front. */
+    ms,
+    /** Of that, time with your eyes on the work. */
+    focusedMs: ms,
+  })
+  .strict();
+export type FocusApp = z.infer<typeof FocusAppSchema>;
+
+/**
+ * Focus session results. "Focused" = your face toward the screen; looking away for under 10 s (a glance) still
+ * counts. A break is 10 s or more away; it ends a stretch. Time the camera couldn't read is left out of both.
+ */
+export const FocusSchema = z
+  .object({
+    /** The length you set; null = until you stopped. */
+    plannedMs: ms.nullable(),
+    /** Time with a reading (focused + breaks). */
+    measuredMs: ms,
+    focusedMs: ms,
+    /** Longest stretch without a break. */
+    longestMs: ms,
+    breaks: z.number().int().nonnegative(),
+    /** Of the breaks: no face for 30 s or more. */
+    leftCount: z.number().int().nonnegative(),
+    leftMs: ms,
+    /** Focus stretches and breaks, in ms from the start of the session (for the focus map). */
+    stretches: z.array(z.object({ startMs: ms, endMs: ms }).strict()).max(400),
+    breakSpans: z.array(z.object({ startMs: ms, endMs: ms, left: z.boolean() }).strict()).max(400),
+    /** Apps in front, most time first; null when app tracking was off. */
+    apps: z.array(FocusAppSchema).max(MAX_FOCUS_APPS + 1).nullable(),
+    /** App changes on the app lane: [startMs, endMs, index into `apps`]. */
+    appSpans: z.array(z.tuple([ms, ms, z.number().int().min(0).max(MAX_FOCUS_APPS)])).max(2000).nullable(),
+    switches: z.number().int().nonnegative().nullable(),
+    /** Your Mac's Do Not Disturb: on for the session, not asked for, or the shortcut failed. */
+    dnd: z.enum(['on', 'off', 'failed']),
+  })
+  .strict();
+export type FocusResult = z.infer<typeof FocusSchema>;
+
+export const ReportSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{8,64}$/),
     version: z.literal(1),
-    recordedAt: micros,
-    appVersion: z.string().max(32),
+    mode: ModeSchema,
+    startedAt: z.number().int().nonnegative(),
+    endedAt: z.number().int().nonnegative(),
+    /** 'test' only in automated runs; always labelled in the UI. */
+    signal: z.enum(['camera', 'test']),
+    content: z
+      .object({
+        kind: ContentKindSchema,
+        /** "Instagram (iPhone Mirroring)", "demo.mp4", "Safari - My project". */
+        name: z.string().max(160),
+        /** Owning app for a window, else null. */
+        app: z.string().max(80).nullable(),
+        /** Video length (review of a file). */
+        durationMs: ms.nullable(),
+      })
+      .strict(),
+    /** Project name (review), else null. */
+    title: z.string().max(120).nullable(),
+    /** Stopped early, or ended by a problem. */
+    partial: z.boolean(),
+    /** Plain-language notes about what limited the reading ("The window closed at 03:12"). */
+    notes: z.array(z.string().max(200)).max(8),
+
+    baseline: z
+      .object({
+        durationMs: ms,
+        /** 'weak' when the settle minute never had a clear, steady signal. Comparisons are hidden then. */
+        quality: z.enum(['good', 'weak']),
+        blinkPerMin: nnum,
+        breathPerMin: nnum,
+        pulse: nnum,
+      })
+      .strict(),
+    /** Time spent watching (excludes settle and paused video). */
+    watchMs: ms,
+    metrics: z
+      .object({
+        blinkPerMin: nnum,
+        longestNoBlinkMs: ms.nullable(),
+        /** null: breathing couldn't be read (chest out of view), so pauses weren't looked for. */
+        holds: z.number().int().nonnegative().nullable(),
+        longestHoldMs: ms.nullable(),
+        breathPerMin: nnum,
+        pulse: nnum,
+        pulseDelta: nnum,
+        hrvMs: nnum,
+        smileMs: ms,
+        awayCount: z.number().int().nonnegative(),
+        awayMs: ms,
+        /** Share of watching time with a clear view of the face, 0-1. */
+        coverage: z.number().min(0).max(1),
+        /** Large on-screen changes (swipes, scrolls, cuts). Approximate. */
+        screenChanges: z.number().int().nonnegative().nullable(),
+      })
+      .strict(),
+    pull: z
+      .object({
+        score: z.number().int().min(0).max(100).nullable(),
+        parts: z.array(PullPartSchema).max(PULL_PARTS.length),
+      })
+      .strict(),
+    events: z.array(ReportEventSchema).max(400),
+    /** Attention curve, 0-1 per bin; null where there was no clear signal. */
+    curve: z.array(z.number().min(0).max(1).nullable()).max(2000),
+    curveBinMs: z.number().int().min(1000).max(120_000),
+    /** Whether the curve's x axis is video time (review of a file) or watching time. */
+    curveAxis: z.enum(['content', 'watch']),
+    /** Self-report, 1 (low) to 5 (great). */
+    felt: z.object({ before: rating, after: rating }).strict(),
+    /** How long the person thought they had scrolled (feed). */
+    guessMs: ms.nullable(),
+    /** Reviewer's own scores (review). */
+    ratings: z.object({ technology: rating, usability: rating, originality: rating }).strict().nullable(),
+    reviewNote: z.string().max(2000).nullable(),
+    /** One headline sentence and one suggestion, built from the person's own numbers. */
+    summary: z.string().max(300),
+    suggestion: z.object({ key: z.string().max(40), text: z.string().max(300) }).strict().nullable(),
+    /** Hook test only: every clip, in the order played. Absent in other reports (and in reports saved before). */
+    clips: z.array(ClipResultSchema).max(MAX_CLIPS).optional(),
+    /** Hook test only: the clip you said you'd post (its index), if you picked one. */
+    picked: z.number().int().min(0).max(MAX_CLIPS - 1).nullable().optional(),
+    /** Focus session only. Absent in other reports. */
+    focus: FocusSchema.optional(),
   })
   .strict();
-export type RecordingHeader = z.infer<typeof RecordingHeaderSchema>;
+export type Report = z.infer<typeof ReportSchema>;
 
-export const RecordingLineSchema = z.union([
-  z.object({ k: z.literal('sig'), frames: z.array(SignalFrameSchema).max(240) }).strict(),
-  z.object({ k: z.literal('phase'), name: PhaseNameSchema, t: micros }).strict(),
-]);
-export type RecordingLine = z.infer<typeof RecordingLineSchema>;
+/** Thumbnails for one report: key -> small JPEG data URL. Never exported. */
+export const THUMB_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
+export const MAX_THUMB_BYTES = 120 * 1024;
+export const MAX_THUMBS = 24;
+export const ThumbsSchema = z
+  .record(z.string().regex(/^t[0-9]{1,4}$/), z.string().max(MAX_THUMB_BYTES).regex(THUMB_RE))
+  .refine((r) => Object.keys(r).length <= MAX_THUMBS, 'too many thumbnails');
+export type Thumbs = z.infer<typeof ThumbsSchema>;
+
+/** The export file (also what "Open a report file" reads). */
+export const ExportSchema = z
+  .object({
+    kind: z.literal('counterfeed-export'),
+    version: z.literal(1),
+    exportedAt: z.string().max(40),
+    note: z.string().max(400),
+    reports: z.array(ReportSchema).max(5000),
+  })
+  .strict();
+export type ExportFile = z.infer<typeof ExportSchema>;
