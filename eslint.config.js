@@ -3,7 +3,7 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
-  { ignores: ['**/node_modules/**', '**/out/**', '**/dist/**', '**/release/**', 'apps/desktop/e2e/artifacts/**'] },
+  { ignores: ['**/node_modules/**', '**/out/**', '**/dist/**', '**/release/**', 'apps/desktop/e2e/artifacts/**', 'apps/desktop/demo/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

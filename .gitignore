@@ -11,3 +11,7 @@ playwright-report/
 .env.*
 !.env.example
 apps/desktop/e2e/artifacts/
+# Local only: the demo video's tools and footage, the write-ups, the agent notes
+apps/desktop/demo/
+docs/
+CLAUDE.md

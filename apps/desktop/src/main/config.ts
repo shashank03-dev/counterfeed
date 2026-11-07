@@ -61,3 +61,13 @@ export function shortcutsBin(i: { e2e: boolean; packaged: boolean; platform: str
 export function isPlausibleKey(key: string): boolean {
   return /^[\x21-\x7e]{8,256}$/.test(key);
 }
+
+/**
+ * Which permission requests the app grants: the camera ('media', video only) and capturing the window you chose
+ * ('display-capture': Electron asks for this when a desktop source is opened with getUserMedia), and only for our
+ * own page. Everything else, audio included, is denied.
+ */
+export function allowPermission(permission: string, mediaTypes: string[] | undefined, own: boolean): boolean {
+  if (!own || mediaTypes?.includes('audio')) return false;
+  return permission === 'media' || permission === 'display-capture';
+}

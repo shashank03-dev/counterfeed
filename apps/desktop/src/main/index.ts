@@ -1,6 +1,6 @@
 import { app, BrowserWindow, nativeTheme, protocol, screen, session, shell, type Rectangle } from 'electron';
 import { join, resolve } from 'node:path';
-import { readDotEnv, shortcutsBin } from './config';
+import { allowPermission, readDotEnv, shortcutsBin } from './config';
 import { Dnd } from './mac';
 import { registerIpc } from './ipc';
 import { MEDIA_SCHEME, MediaRegistry } from './media';
@@ -164,14 +164,13 @@ app.whenReady().then(async () => {
     },
   });
 
-  // Grant only the camera and screen capture ('media'), only to our own page. Everything else is denied.
+  // Grant only the camera and capturing the chosen window, only to our own page. Everything else is denied.
   // (SmartSpectra docs/nodejs.md, Permission flow: "Grant only the camera, and only to your own bundled page".)
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
     const url = details?.requestingUrl || wc?.getURL() || '';
-    const audio = 'mediaTypes' in (details ?? {}) && (details as { mediaTypes?: string[] }).mediaTypes?.includes('audio');
-    callback(permission === 'media' && !audio && isOwnOrigin(url));
+    callback(allowPermission(permission, (details as { mediaTypes?: string[] } | undefined)?.mediaTypes, isOwnOrigin(url)));
   });
-  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => permission === 'media' && isOwnOrigin(origin));
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => allowPermission(permission, undefined, isOwnOrigin(origin)));
 
   createWindow();
   app.on('activate', () => {

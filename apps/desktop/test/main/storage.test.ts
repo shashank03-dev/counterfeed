@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Report } from '@counterfeed/shared';
-import { buildConfig, isPlausibleKey } from '../../src/main/config';
+import { allowPermission, buildConfig, isPlausibleKey } from '../../src/main/config';
 import { listDemoPack, MediaRegistry, parseRange } from '../../src/main/media';
 import { parseExport, Storage } from '../../src/main/storage';
 
@@ -160,5 +160,17 @@ describe('local video streaming', () => {
     expect((await m.respond('cfmedia://video/' + '0'.repeat(32), null)).status).toBe(404);
     expect((await m.respond('cfmedia://video/../../etc/passwd', null)).status).toBe(404);
     expect(await readFile(file, 'utf8')).toBe('0123456789');
+  });
+});
+
+describe('permissions', () => {
+  it('grants the camera and capturing the chosen window, only to our own page', () => {
+    expect(allowPermission('media', ['video'], true)).toBe(true);
+    // Electron asks for 'display-capture' when the chosen window is opened (found when a real feed check kept no
+    // pictures: the request was denied).
+    expect(allowPermission('display-capture', ['video'], true)).toBe(true);
+    expect(allowPermission('display-capture', ['video'], false)).toBe(false);
+    expect(allowPermission('media', ['video', 'audio'], true)).toBe(false);
+    for (const p of ['geolocation', 'notifications', 'clipboard-read', 'midi']) expect(allowPermission(p, undefined, true)).toBe(false);
   });
 });
