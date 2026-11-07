@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import react from '@vitejs/plugin-react';
@@ -39,12 +40,16 @@ function csp(): Plugin {
   };
 }
 
+/** The app's own version, baked into main: run unpackaged, Electron would report its own version instead. */
+const APP_VERSION = (JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as { version: string }).version;
+
 // Workspace TypeScript and the SDK preload are bundled (a sandboxed preload can only require 'electron').
 const bundled = ['@counterfeed/shared', '@smartspectra/node-sdk'];
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({ exclude: ['@counterfeed/shared'] })],
+    define: { __APP_VERSION__: JSON.stringify(APP_VERSION) },
     build: { minify: true, rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } } },
   },
   preload: {

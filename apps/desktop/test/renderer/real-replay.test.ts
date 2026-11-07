@@ -110,3 +110,56 @@ for (const x of RECORDINGS) {
     });
   });
 }
+
+/*
+ * Real guided focus session (`node e2e/real-focus.mjs`, 2 min, second run on Nov 7 2026), switching desktops on
+ * one screen. What the raw data shows:
+ * - short head turns while working (each 0.5-1.6 s): glances, not breaks; the asked-for glance at 22-24 s too.
+ * - 40.7-54.6 s (asked: look down 38-53): pitch up, the SDK's "not facing forward" on and off. A break.
+ * - 79.5-114.2 s (asked: step away 75-110): the SDK sent no face data at all and never said "no face" (its codes
+ *   were "chest not in view", then "too low"). Landmarks returned at 114.2 s, blinks only at 117.2 s.
+ */
+const focusRec = load('rec-focus.json');
+describe.skipIf(!focusRec)('real recording: focus session', () => {
+  const { report } = buildReport(focusRec!.capture, 'real-focus');
+  const f = report.focus!;
+  const b = f.breakSpans.map((x) => ({ from: x.startMs / 1000, to: x.endMs / 1000, left: x.left }));
+  it('the glance is not a break', () => {
+    expect(overlaps(b, 18, 30)).toEqual([]);
+  });
+  it('looking down at the lap is a break', () => {
+    expect(overlaps(b, 42, 52).length).toBe(1);
+  });
+  it('stepping away is "left your desk", ending when the face data comes back (not when blinks restart)', () => {
+    const left = b.filter((x) => x.left);
+    expect(left).toHaveLength(1);
+    expect(left[0]!.from).toBeGreaterThan(78);
+    expect(left[0]!.to).toBeLessThan(115);
+  });
+  it('no breaks that weren\'t asked for, and a valid report', () => {
+    expect(b).toHaveLength(2);
+    expect(ReportSchema.safeParse(report).success).toBe(true);
+  });
+});
+
+/*
+ * Real guided hook test (`node e2e/real-hooks.mjs`): demo pack in order, a smile asked for during clip 2 (held
+ * 12-20 s, ending just after clip 3 began), clip 5 swiped after about a second. The person blinked about 5 times
+ * a minute, and the eye shapes agree with the SDK's blinks (none missed).
+ */
+const hookRec = load('rec-hooks.json');
+describe.skipIf(!hookRec)('real recording: hook test', () => {
+  const { report } = buildReport(hookRec!.capture, 'real-hooks');
+  const byName = (n: string) => report.clips!.find((c) => c.name.startsWith(n))!;
+  it('the swiped clip lost you in its first 3 s and ranks last', () => {
+    expect(byName('Test card')).toMatchObject({ status: 'skipped', hook: 'lost', rank: 5 });
+  });
+  it('the smile counts for clip 2 only, and clip 2 ranks first', () => {
+    expect(byName('Fractal dive').parts.find((p) => p.key === 'face')!.value).toBe(1);
+    expect(byName('Life').parts.find((p) => p.key === 'face')!.value).toBe(0);
+    expect(byName('Fractal dive').rank).toBe(1);
+  });
+  it('no clip "grabbed" at 0:00 from a stare that began before it', () => {
+    expect(report.clips!.filter((c) => c.grabbedAtMs === 0)).toEqual([]);
+  });
+});

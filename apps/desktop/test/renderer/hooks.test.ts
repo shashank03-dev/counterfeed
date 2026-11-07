@@ -64,8 +64,9 @@ describe('hook test: each clip', () => {
   it('every result is a valid stored clip', () => {
     for (const o of out) expect(() => ClipResultSchema.parse(o.result)).not.toThrow();
   });
-  it('a clip that held you from the first frame landed, and wins', () => {
-    expect(A).toMatchObject({ status: 'finished', hook: 'landed', grabbedAtMs: 0, rank: 1, leftAtMs: null });
+  it('a clip that held you within its first 3 s landed, and wins', () => {
+    // Held within its first 3 s; the stare is counted from the clip's start, so it shows at 0:02, not 0:00.
+    expect(A).toMatchObject({ status: 'finished', hook: 'landed', grabbedAtMs: 2000, rank: 1, leftAtMs: null });
     expect(A!.score).toBeGreaterThanOrEqual(90);
     expect(A!.curve).toHaveLength(10);
   });
@@ -234,5 +235,32 @@ describe('hook test: the whole report', () => {
     const feed = buildReport({ ...capture(), mode: 'feed', clips: null, picked: null }, 'r-test-feed1').report;
     expect('clips' in feed).toBe(false);
     expect(() => ReportSchema.parse(feed)).not.toThrow();
+  });
+});
+
+describe('hook test: nothing carries over from the clip before (real run, Nov 2026)', () => {
+  // Someone who blinks rarely, and a smile held through clip 1 that ends just after clip 2 begins.
+  const clips: ClipInfo[] = [
+    { name: 'One.mp4', durationMs: 10_000 },
+    { name: 'Two.mp4', durationMs: 10_000 },
+  ];
+  const runs: ClipRun[] = [run(0, 0, 10, 'end'), run(1, 10, 20, 'end')];
+  const sig: HookSignals = {
+    clear: [{ start: at(-20), end: at(25) }],
+    away: [],
+    blinks: [at(-15), at(13), at(16)],
+    hasBlinkData: true,
+    baseBlinkPerMin: 5,
+    expressions: [{ kind: 'smile', start: at(2), end: at(10.3), peak: 100 }],
+  };
+  const [one, two] = analyzeClips(clips, runs, sig).map((o) => o.result);
+  it('the smile counts for the clip it started in only', () => {
+    expect(one!.parts.find((p) => p.key === 'face')!.value).toBe(1);
+    expect(two!.parts.find((p) => p.key === 'face')!.value).toBe(0);
+    expect(one!.rank).toBe(1);
+  });
+  it('a stare that began in the clip before does not "grab" at 0:00', () => {
+    expect(two!.grabbedAtMs).toBeNull();
+    expect(two!.hook).toBe('steady');
   });
 });

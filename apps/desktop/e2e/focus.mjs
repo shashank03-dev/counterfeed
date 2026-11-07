@@ -183,12 +183,27 @@ export async function focusSection(h) {
   await start();
   await waitRuns(fp, 5);
   await vis(fp, '[data-testid="watch-bar"]', 40000);
+  await fp.waitForTimeout(24_000); // long enough to be scored (20 s), so History has two sessions to compare
   await fp.click('[data-testid="watch-bar"] [data-testid="stop"]');
   check('stopping on the bar turns it off', (await waitRuns(fp, 6)).slice(4).join() === `${ON},${OFF}`, runs());
   await vis(fp, '[data-testid="felt-focus"]');
   await fp.click('[data-testid="see-report"]');
   check('a session stopped early still gets a report', await vis(fp, '[data-testid="report"][data-mode="focus"]', 20000));
+  check('…scored, and marked as stopped early', /^\d+Focus$/.test(((await text(fp, '[data-testid="score-ring"]')) ?? '').replace(/\s/g, '')) && ((await text(fp, '[data-testid="watched"]')) ?? '').includes('of 2 min'), await text(fp, '[data-testid="watched"]'));
   await fp.click('[data-testid="done"]');
+
+  // ---- Focus over time, in History.
+  await fp.click('[data-testid="nav-history"]');
+  await fp.click('[role="radio"]:has-text("Focus")');
+  check('History shows your focus over time once there are two scored sessions', (await vis(fp, '[data-testid="focus-trend"]')) && (await fp.$$('[data-testid="focus-trend-bar"]')).length === 2);
+  const trendLine = (await text(fp, '[data-testid="focus-trend-line"]')) ?? '';
+  // Apps need 2 minutes in front across sessions to be named; these test sessions are shorter, so none is.
+  check('…with averages (no app named from under 2 minutes of use)', /^Bars: % of each session focused\. Last 2 sessions: \d+% focused on average, Focus score \d+, longest stretch [^.]+\.$/.test(trendLine.trim()), trendLine);
+  await shot(fp, '30-focus-trend');
+  await fp.click('[data-testid="focus-trend-bar"] >> nth=0');
+  check('clicking a bar opens that session', (await vis(fp, '[data-testid="report"][data-mode="focus"]')) && ((await text(fp, '[data-testid="report-title"]')) ?? '').trim() === 'Write the launch post');
+  await fp.click('[data-testid="nav-settings"]');
+  check('Settings shows the app’s own version', ((await text(fp, 'body')) ?? '').includes('Counterfeed 1.0.0.'), ((await text(fp, 'body')) ?? '').match(/Counterfeed \d+\.\d+\.\d+/)?.[0]);
   await start();
   await waitRuns(fp, 7);
   check('no errors in the page (focus)', !F.errors.length, F.errors.slice(0, 3));

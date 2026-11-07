@@ -242,3 +242,43 @@ export function focusCurve(active: Interval[], spans: FocusSpans, binUs: number)
   return out;
 }
 
+/** Focus sessions over time (History): the recent scored sessions, averages, and the apps you focus best in. */
+export interface FocusTrend {
+  /** Oldest first, at most `max`. */
+  sessions: { id: string; startedAt: number; title: string; share: number; score: number; longestMs: number }[];
+  avgShare: number;
+  avgScore: number;
+  longestMs: number;
+  /** Across all those sessions, apps with at least 2 minutes in front, most focused first (at most 3). */
+  bestApps: { name: string; share: number; ms: number }[];
+}
+
+export function focusTrend(reports: { id: string; mode: string; startedAt: number; title: string | null; pull: { score: number | null }; focus?: { measuredMs: number; focusedMs: number; longestMs: number; apps: { name: string; ms: number; focusedMs: number }[] | null } }[], max = 12): FocusTrend | null {
+  const scored = reports
+    .filter((r) => r.mode === 'focus' && r.focus && r.pull.score !== null && r.focus.measuredMs > 0)
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .slice(-max);
+  if (scored.length < 2) return null;
+  const sessions = scored.map((r) => ({ id: r.id, startedAt: r.startedAt, title: r.title || 'Focus session', share: r.focus!.focusedMs / r.focus!.measuredMs, score: r.pull.score!, longestMs: r.focus!.longestMs }));
+  const apps = new Map<string, { ms: number; focusedMs: number }>();
+  for (const r of scored)
+    for (const a of r.focus!.apps ?? []) {
+      if (a.name === OTHER_APPS) continue;
+      const x = apps.get(a.name) ?? { ms: 0, focusedMs: 0 };
+      x.ms += a.ms;
+      x.focusedMs += a.focusedMs;
+      apps.set(a.name, x);
+    }
+  const bestApps = [...apps]
+    .filter(([, v]) => v.ms >= 120_000)
+    .map(([name, v]) => ({ name, share: v.focusedMs / v.ms, ms: v.ms }))
+    .sort((a, b) => b.share - a.share || b.ms - a.ms)
+    .slice(0, 3);
+  return {
+    sessions,
+    avgShare: sessions.reduce((s, x) => s + x.share, 0) / sessions.length,
+    avgScore: Math.round(sessions.reduce((s, x) => s + x.score, 0) / sessions.length),
+    longestMs: Math.max(...sessions.map((x) => x.longestMs)),
+    bestApps,
+  };
+}

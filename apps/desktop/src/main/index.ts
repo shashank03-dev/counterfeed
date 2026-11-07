@@ -31,6 +31,9 @@ protocol.registerSchemesAsPrivileged([{ scheme: MEDIA_SCHEME, privileges: { stan
 
 if (!E2E && !app.requestSingleInstanceLock()) app.quit();
 
+/** Set at build time from package.json (electron.vite.config.ts). */
+declare const __APP_VERSION__: string;
+
 const DEV_URL = process.env.ELECTRON_RENDERER_URL;
 const media = new MediaRegistry();
 let win: BrowserWindow | null = null;
@@ -152,7 +155,7 @@ app.whenReady().then(async () => {
     window: () => win,
     // Shipped next to the app (electron-builder extraResources); in development, straight from the repo.
     demoDir: app.isPackaged ? join(process.resourcesPath, 'demo-pack') : join(__dirname, '../../resources/demo-pack'),
-    base: { env, appVersion: app.getVersion(), e2e: E2E, packaged: app.isPackaged, platform: process.platform },
+    base: { env, appVersion: app.isPackaged ? app.getVersion() : __APP_VERSION__, e2e: E2E, packaged: app.isPackaged, platform: process.platform },
     setCompact,
     setBusy: (b) => (busy = b),
     quit: () => {

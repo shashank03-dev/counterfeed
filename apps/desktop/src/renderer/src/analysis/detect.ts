@@ -65,6 +65,36 @@ export function codeIntervals(quality: { t: number; code: number }[], span: Inte
 }
 
 /**
+ * The SDK's face streams going quiet. From a real focus recording (Nov 2026): when the person left the desk the SDK
+ * simply stopped sending face data for 33 s and never reported "no face" (the last code, "chest not in view", stayed
+ * up); when the head turned or tilted beyond the landmark tracker's range, landmarks stopped for 1.5-10 s while
+ * blinking kept coming. Facing the screen, the landmark stream had no gap at all.
+ */
+export const SIGNAL = {
+  /** No face data at all for this long: nobody in front of the camera. */
+  goneUs: 2e6,
+  /** No landmarks for this long while the face is still seen: head turned beyond what the tracker follows. */
+  lostUs: 1e6,
+} as const;
+
+/**
+ * Stretches of `span` at least `minUs` long with no sample in `times` (ascending). A gap still open at the end of
+ * the span needs `edgeUs` more, so a live edge isn't flagged while the next packet is on its way.
+ */
+export function streamGaps(times: number[], span: Interval, minUs: number, edgeUs = 0): Interval[] {
+  const out: Interval[] = [];
+  let prev = span.start;
+  for (const t of times) {
+    if (t < span.start) continue;
+    if (t >= span.end) break;
+    if (t - prev >= minUs) out.push({ start: prev, end: t });
+    prev = t;
+  }
+  if (span.end - prev >= minUs + edgeUs) out.push({ start: prev, end: span.end });
+  return out;
+}
+
+/**
  * Looking away, from head pose (face landmarks), measured against YOUR OWN recent pose rather than a fixed
  * "straight ahead": people sit differently, and change posture during a session. Tuned on a real recording:
  * facing the screen varied by about ±0.03 in both ratios; turning the head to the side moved yaw by ~0.9;
@@ -162,18 +192,63 @@ export interface View {
   unclear: Interval[];
   /** Face OK and the SDK fully happy, chest included: the only time the breathing wave is read. */
   breath: Interval[];
+  /** No face data at all (also inside `away`): nobody in front of the camera. */
+  gone: Interval[];
 }
 
 /**
  * Where each measure can be trusted. The SDK reports ONE validation code at a time, so "chest not in view" can
  * hide a head turn; head pose from the landmarks catches turns and looking down regardless of that code.
  */
-export function viewIntervals(quality: { t: number; code: number }[], span: Interval, pose: PoseSample[] = [], seed: PoseSample[] = []): View {
+export function viewIntervals(
+  quality: { t: number; code: number }[],
+  span: Interval,
+  pose: PoseSample[] = [],
+  seed: PoseSample[] = [],
+  /** Times of samples that need a face (blink detections), even if none. Pass only when the source sends landmarks. */
+  faceTimes?: number[],
+  edgeUs = 0,
+): View {
   const code = faceIntervals(quality, span);
   const turned = pose.length ? poseAway(pose, span, seed) : [];
-  const away = merge([...code.away, ...turned]);
-  const ok = subtract(code.ok, away);
-  return { ok, away, unclear: subtract(code.unclear, away), breath: intersect(ok, codeIntervals(quality, span, (c) => c === V.ok)) };
+  // Any face data at all (blinks or landmarks) means someone is there: after a return, landmarks came back 3 s
+  // before blinks in a real run. An empty window with face timing on means nobody has been there all along.
+  const seen = faceTimes ? [...faceTimes, ...pose.map((p) => p.t)].sort((a, b) => a - b) : [];
+  const gone = faceTimes ? streamGaps(seen, span, SIGNAL.goneUs, edgeUs) : [];
+  const lost = faceTimes ? lostLandmarks(pose, span, seed, turned, gone, edgeUs) : { away: [], unclear: [] };
+  const away = merge([...code.away, ...turned, ...lost.away, ...gone]);
+  const unclear = subtract(merge([...code.unclear, ...lost.unclear]), away);
+  const ok = subtract(subtract(code.ok, away), unclear);
+  return { ok, away, unclear, breath: intersect(ok, codeIntervals(quality, span, (c) => c === V.ok)), gone };
+}
+
+/**
+ * Landmark gaps while the face is still seen. The tracker loses the face when the head turns or tilts far, but it
+ * can also drop out for reasons we can't see. So a gap counts as "away" only when the head was already moving away
+ * at either edge (turned, or the few poses next to the gap are off your normal); otherwise it's "can't tell".
+ */
+function lostLandmarks(pose: PoseSample[], span: Interval, seed: PoseSample[], turned: Interval[], gone: Interval[], edgeUs: number) {
+  const sorted = [...pose].sort((a, b) => a.t - b.t);
+  const gaps = subtract(streamGaps(sorted.map((p) => p.t), span, SIGNAL.lostUs, edgeUs), gone);
+  const out = { away: [] as Interval[], unclear: [] as Interval[] };
+  for (const g of gaps) {
+    const touchesTurn = turned.some((i) => i.end >= g.start - 500_000 && i.start <= g.end + 500_000);
+    const facing = [...seed, ...sorted.filter((p) => p.t >= g.start - POSE.windowUs && p.t < g.start && !contains(turned, p.t))];
+    let off = false;
+    if (facing.length >= POSE.minSamples) {
+      const b = { yaw: median(facing.map((p) => p.yaw)), pitch: median(facing.map((p) => p.pitch)) };
+      const edge = (xs: PoseSample[]) => {
+        if (!xs.length) return false;
+        const dp = median(xs.map((p) => p.pitch)) - b.pitch;
+        return Math.abs(median(xs.map((p) => p.yaw)) - b.yaw) > POSE.yaw || dp > POSE.down || dp < -POSE.up;
+      };
+      const before = sorted.filter((p) => p.t <= g.start && p.t > g.start - 500_000);
+      const after = sorted.filter((p) => p.t >= g.end && p.t < g.end + 500_000);
+      off = edge(before) || edge(after);
+    }
+    (touchesTurn || off ? out.away : out.unclear).push(g);
+  }
+  return out;
 }
 
 /** Blink times: rising edges of the SDK's blink detection, at least 150 ms apart. */

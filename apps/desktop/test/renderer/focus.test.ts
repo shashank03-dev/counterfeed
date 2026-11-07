@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_FOCUS_APPS, ReportSchema } from '@counterfeed/shared';
-import { appUsage, FOCUS, focusBand, focusCurve, focusDuration, focusParts, focusSpans, focusWords, OTHER_APPS, type AppSample, type FocusMeasures } from '../../src/renderer/src/analysis/focus';
+import { appUsage, FOCUS, focusBand, focusTrend, focusCurve, focusDuration, focusParts, focusSpans, focusWords, OTHER_APPS, type AppSample, type FocusMeasures } from '../../src/renderer/src/analysis/focus';
 import { buildReport, type Capture } from '../../src/renderer/src/analysis/report';
 import { findBanned } from '../../src/renderer/src/analysis/words';
 import { emptyNormalized, type Normalized } from '../../src/renderer/src/sensing/normalize';
@@ -197,8 +197,9 @@ function focusCapture(over: Partial<Capture> = {}): Capture {
     const every = s < 40 ? 3 : 6;
     const b = s - lastBlink >= every;
     if (b) lastBlink = s;
-    n.blink.push({ t: at(s), detected: b || s - lastBlink < 0.1, stable: true });
-    const noFace = s >= 200 && s < 240;
+    // Away from the desk the SDK sends no face data at all (the last samples land at 200 s and 240 s).
+    const noFace = s > 200 && s < 240;
+    if (!noFace) n.blink.push({ t: at(s), detected: b || s - lastBlink < 0.1, stable: true });
     const turned = (s >= 100 && s < 115) || (s >= 150 && s < 151.2) || (s >= 152 && s < 160);
     if (i % 3 === 0 && !noFace) n.pose.push({ t: at(s), yaw: turned ? 0.8 : -0.05, pitch: s >= 60 && s < 64 ? 0.48 : 0.33, stable: true });
     if (i % 30 === 0) {
@@ -324,5 +325,31 @@ describe('buildReport (focus)', () => {
     expect(FOCUS.breakUs).toBe(10 * S);
     expect(FOCUS.leftUs).toBe(30 * S);
     expect(FOCUS.nudgeUs).toBe(20 * S);
+  });
+});
+
+describe('focusTrend (History)', () => {
+  const rep = (id: string, startedAt: number, score: number | null, focusedMs: number, apps: { name: string; ms: number; focusedMs: number }[] | null = null, mode = 'focus') => ({
+    id, mode, startedAt, title: null, pull: { score }, focus: { measuredMs: 600_000, focusedMs, longestMs: focusedMs / 2, apps },
+  });
+  it('needs two scored focus sessions; ignores other modes and unscored ones', () => {
+    expect(focusTrend([rep('a', 1, 70, 400_000)])).toBeNull();
+    expect(focusTrend([rep('a', 1, 70, 400_000), rep('b', 2, null, 400_000), rep('c', 3, 60, 1, null, 'feed')])).toBeNull();
+  });
+  it('oldest first, averages, and the apps you focus best in (2 minutes or more)', () => {
+    const t = focusTrend([
+      rep('b', 2, 80, 540_000, [{ name: 'Code', ms: 500_000, focusedMs: 480_000 }, { name: 'Slack', ms: 100_000, focusedMs: 20_000 }]),
+      rep('a', 1, 60, 300_000, [{ name: 'Code', ms: 300_000, focusedMs: 200_000 }, { name: 'Safari', ms: 300_000, focusedMs: 100_000 }, { name: OTHER_APPS, ms: 999_000, focusedMs: 999_000 }]),
+    ])!;
+    expect(t.sessions.map((s) => s.id)).toEqual(['a', 'b']);
+    expect(t.avgShare).toBeCloseTo(0.7);
+    expect(t.avgScore).toBe(70);
+    expect(t.longestMs).toBe(270_000);
+    expect(t.bestApps.map((a) => a.name)).toEqual(['Code', 'Safari']);
+    expect(t.bestApps[0]!.share).toBeCloseTo(0.85);
+  });
+  it('keeps the latest sessions only', () => {
+    const many = Array.from({ length: 20 }, (_, i) => rep(`r${i}`, i, 50, 300_000));
+    expect(focusTrend(many, 12)!.sessions.map((s) => s.id)[0]).toBe('r8');
   });
 });

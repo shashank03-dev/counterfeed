@@ -73,10 +73,12 @@ export function buildReport(c: Capture, id: string): { report: Report; events: T
 
   // Where each measure can be trusted, across settle and watch. Head pose is judged against how you sat while the
   // camera learned your normal (its last 30 s), then follows your posture as the session goes on.
-  const settleView = viewIntervals(c.quality, c.settle, s.pose);
+  // Face data going quiet counts too (no landmarks: head turned beyond the tracker; nothing at all: nobody there).
+  const faceTimes = s.pose.length ? s.blink.map((b) => b.t) : undefined;
+  const settleView = viewIntervals(c.quality, c.settle, s.pose, [], faceTimes);
   const settleClear = settleView.ok;
   const seed = s.pose.filter((p) => p.t >= c.settle.end - 30e6 && p.t < c.settle.end && overlap(settleClear, p.t, p.t + 1) > 0);
-  const view = viewIntervals(c.quality, c.watch, s.pose, seed);
+  const view = viewIntervals(c.quality, c.watch, s.pose, seed, faceTimes);
   const clear = intersect(view.ok, active);
   const away = intersect(view.away, active);
 
@@ -200,7 +202,7 @@ export function buildReport(c: Capture, id: string): { report: Report; events: T
   let focusPull: Report['pull'] | null = null;
   let focusCurveBins: (number | null)[] | null = null;
   if (c.mode === 'focus') {
-    const spans = focusSpans(active, view, codeIntervals(c.quality, c.watch, (code) => code === V.noFace));
+    const spans = focusSpans(active, view, merge([...codeIntervals(c.quality, c.watch, (code) => code === V.noFace), ...view.gone]));
     const usage = c.focus?.apps ? appUsage(c.focus.apps, active, spans.focused) : null;
     const focusedUs = total(spans.focused);
     const measuredUs = focusedUs + total(spans.breaks);

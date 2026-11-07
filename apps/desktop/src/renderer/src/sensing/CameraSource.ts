@@ -1,7 +1,7 @@
 import { breathingMetrics, cardioMetrics, MetricType, ProcessingStatus, SmartSpectraErrorCode, SmartSpectraSDK } from '@smartspectra/node-sdk/renderer';
 import { decodeMetrics } from '@smartspectra/node-sdk/messages';
 import { Emitter } from '../lib/emitter';
-import { normalize, type DecodedMetrics } from './normalize';
+import { normalize, tsToUs, type DecodedMetrics } from './normalize';
 import { nowUs } from '../lib/time';
 import { applyValidation, V } from './quality';
 import type { Quality, SensingProblem, SignalSource, SourceEvents, SourceStatus } from './types';
@@ -93,6 +93,17 @@ export class CameraSource implements SignalSource {
   }
 
   private keepRaw(d: DecodedMetrics) {
+    // Every frame: the 12 eye-contour points (MediaPipe 33,160,158,133,153,144 and 362,385,387,263,373,380), to
+    // check blink detection from eye shape against the SDK's own. Developer runs only (recordRaw is never on when
+    // packaged); kept in the page, saved by the guided real-camera scripts to a git-ignored folder.
+    const eyes = window as unknown as { __counterfeedRawEyes?: unknown[] };
+    for (const f of d.face?.landmarks ?? []) {
+      const v = f.value;
+      if (!v || v.length < 468) continue;
+      const pts = [33, 160, 158, 133, 153, 144, 362, 385, 387, 263, 373, 380].flatMap((i) => [v[i]?.x ?? null, v[i]?.y ?? null]);
+      const t = tsToUs(f.timestamp);
+      (eyes.__counterfeedRawEyes ??= []).push({ t: Number.isFinite(t) ? t : nowUs(), p: pts });
+    }
     const l = d.face?.landmarks?.at(-1);
     const now = performance.now();
     if (!l?.value?.length || now - this.lastRawAt < 1000) return;

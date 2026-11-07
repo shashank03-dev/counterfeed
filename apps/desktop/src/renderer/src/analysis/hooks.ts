@@ -1,7 +1,7 @@
 import type { ClipResult } from '@counterfeed/shared';
 import { smooth } from './curve';
 import type { ExprEvent } from './detect';
-import { contains, intersect, merge, overlap, total, type Interval } from './intervals';
+import { contains, intersect, merge, total, type Interval } from './intervals';
 import { playingIntervals, TimeMap, type TimeMark } from './timemap';
 
 /*
@@ -99,16 +99,22 @@ export interface ClipAnalysis {
 }
 
 /**
+ * Time without blinking at t, counted from the clip's start at the earliest: a stare that began in the clip before
+ * belongs to that clip. (A real run showed it: a person who blinks about 5 times a minute "grabbed" at 0:00 on
+ * every clip, because the stare carried over.)
+ */
+function sinceBlink(t: number, s: HookSignals, clipStart: number): number {
+  const i = lastBlinkIdx(s.blinks, t);
+  return t - Math.max(clipStart, i < 0 ? -Infinity : s.blinks[i]!);
+}
+
+/**
  * Attention at wall time t while facing the screen: 0.5 for "watching", rising to 1 the longer you go without
  * blinking (relative to your usual gap; a blink resets it), plus 0.25 during a strong smile or surprise.
  */
-function attention(t: number, s: HookSignals, gapUs: number, faces: ExprEvent[]): number {
+function attention(t: number, s: HookSignals, gapUs: number, faces: ExprEvent[], clipStart: number): number {
   let a = 0.5;
-  if (s.hasBlinkData) {
-    const i = lastBlinkIdx(s.blinks, t);
-    const since = i < 0 ? gapUs : t - s.blinks[i]!;
-    a = 0.5 + 0.5 * Math.min(1, since / gapUs);
-  }
+  if (s.hasBlinkData) a = 0.5 + 0.5 * Math.min(1, sinceBlink(t, s, clipStart) / gapUs);
   if (faces.some((e) => t >= e.start && t <= e.end + 1e6)) a = Math.min(1, a + 0.25);
   return a;
 }
@@ -146,7 +152,10 @@ export function analyzeClip(index: number, info: ClipInfo, run: ClipRun | undefi
   const stayed = status === 'finished' ? 1 : durationMs > 0 ? clamp01(maxPos / durationMs) : 0;
 
   const gapUs = usualGapUs(s.baseBlinkPerMin);
-  const faces = s.expressions.filter((e) => (e.kind === 'smile' || e.kind === 'surprise') && overlap(active, e.start, e.end + 1e6) > 0);
+  // A smile or surprise belongs to the clip it started in (a real run: a smile held through clip 2 ended just after
+  // clip 3 began, and clip 3 got the credit).
+  const faces = s.expressions.filter((e) => (e.kind === 'smile' || e.kind === 'surprise') && e.start >= run.start && e.start < end);
+  const clipStart = active[0]?.start ?? run.start;
 
   // Second-by-second along the clip.
   const nBins = Math.max(1, Math.ceil(Math.max(durationMs, 1) / 1000));
@@ -164,15 +173,12 @@ export function analyzeClip(index: number, info: ClipInfo, run: ClipRun | undefi
         b.away++;
         b.firstT ??= t;
       } else if (contains(s.clear, t)) {
-        const a = attention(t, s, gapUs, faces);
+        const a = attention(t, s, gapUs, faces, clipStart);
         b.seen++;
         b.sum += a;
         b.firstT ??= t;
         clearN++;
-        if (s.hasBlinkData) {
-          const i = lastBlinkIdx(s.blinks, t);
-          stareSum += Math.min(1, (i < 0 ? gapUs : t - s.blinks[i]!) / gapUs);
-        }
+        if (s.hasBlinkData) stareSum += Math.min(1, sinceBlink(t, s, clipStart) / gapUs);
       }
     }
   }
@@ -232,8 +238,7 @@ export function analyzeClip(index: number, info: ClipInfo, run: ClipRun | undefi
   else if (grabbed !== null && grabbed < HOOK.openingMs) hook = 'landed';
   else if (grabbed !== null) hook = 'slow';
   else hook = 'steady';
-  // A clip that lost you in its first 3 s didn't grab you there (a stare carried over from the clip before can
-  // look like one).
+  // A clip that lost you in its first 3 s didn't grab you there.
   if (hook === 'lost' && grabbed !== null && grabbed < HOOK.openingMs) grabbed = null;
 
   const bestBin = best === null ? null : bins[best]!;

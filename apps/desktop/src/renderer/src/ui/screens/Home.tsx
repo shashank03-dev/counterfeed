@@ -21,7 +21,7 @@ export function Home() {
           <span className="text-g-accent">Measure it back.</span>
         </h1>
         <p className="mt-3 max-w-[560px] text-[14.5px] leading-relaxed text-fg-muted">
-          Counterfeed watches your breathing, blinking and gaze with your Mac’s camera while you scroll or review something, then shows you what it did to your attention. Everything stays on this Mac.
+          Counterfeed watches your breathing, blinking and gaze with your Mac’s camera while you scroll, review, test a clip or get work done, then shows you what it did to your attention. Everything stays on this Mac.
         </p>
       </header>
 

@@ -10,6 +10,8 @@ import {
   faceStateOf,
   MAX_HOLD_US,
   POSE,
+  SIGNAL,
+  streamGaps,
   poseAway,
   viewIntervals,
   noBlinkStretches,
@@ -183,6 +185,60 @@ describe('where each measure is trusted (viewIntervals)', () => {
     const v = viewIntervals(q, { start: at(0), end: at(60) }, poses(60, [[40, 45, 0.85, 0.2]]));
     expect(total(v.breath) / S).toBeCloseTo(20 + 10 + 15, 0);
     expect(total(v.ok) / S).toBeCloseTo(55, 0);
+  });
+});
+
+describe('face data going quiet (real focus recording, Nov 2026)', () => {
+  const span = { start: at(0), end: at(60) };
+  const times = (from: number, to: number) => Array.from({ length: (to - from) * 30 }, (_, i) => at(from + i / 30));
+  it('finds stretches with no samples, and waits at a live edge', () => {
+    const t = [...times(0, 10), ...times(12, 40)];
+    expect(secs(streamGaps(t, span, 1e6))).toEqual([[10, 12], [40, 60]]);
+    const live = { start: at(0), end: at(40.9) };
+    expect(secs(streamGaps(t, live, 1e6, 0.5e6))).toEqual([[10, 12]]); // 0.9 s since the last packet: not yet
+  });
+  it('leaving the desk while the SDK keeps its last code ("chest not in view") is "gone", not focused', () => {
+    // The real failure: the SDK stopped sending face data for 33 s and never said "no face".
+    const q = [{ t: at(0), code: V.chestNotVisible }];
+    const blink = [...times(0, 20), ...times(50, 60)].map((t) => t);
+    const p = poses(60).filter((x) => x.t < at(20) || x.t >= at(50));
+    const v = viewIntervals(q, span, p, [], blink);
+    expect(secs(v.gone).map((g) => g.map(Math.round))).toEqual([[20, 50]]);
+    expect(total(v.ok) / S).toBeCloseTo(30, 0);
+  });
+  it('landmarks dropping right after the head turns = turned beyond the tracker = away', () => {
+    const q = [{ t: at(0), code: V.chestNotVisible }];
+    const p = poses(60, [[28, 30, 0.9, 0.33]]).filter((x) => x.t < at(30) || x.t >= at(34));
+    const v = viewIntervals(q, span, p, [], times(0, 60));
+    expect(v.gone).toEqual([]);
+    expect(secs(v.away).map((g) => g.map(Math.round))).toEqual([[28, 34]]);
+    expect(SIGNAL.lostUs).toBeLessThan(SIGNAL.goneUs);
+  });
+  it("landmarks dropping with the head facing on both sides = can't tell (left out, not away)", () => {
+    const q = [{ t: at(0), code: V.chestNotVisible }];
+    const p = poses(60).filter((x) => x.t < at(30) || x.t >= at(34));
+    const v = viewIntervals(q, span, p, [], times(0, 60));
+    expect(v.away).toEqual([]);
+    expect(secs(v.unclear).map((g) => g.map(Math.round))).toEqual([[30, 34]]);
+    expect(total(v.ok) / S).toBeCloseTo(56, 0);
+  });
+  it('a live window with no face data at all is "gone" (it was read as focused in a real run)', () => {
+    const q = [{ t: at(0), code: V.chestNotVisible }];
+    const v = viewIntervals(q, span, [], [], [], 500_000);
+    expect(secs(v.gone)).toEqual([[0, 60]]);
+    expect(v.ok).toEqual([]);
+  });
+  it('coming back ends "gone" at the first face data, even before blinks restart', () => {
+    const q = [{ t: at(0), code: V.chestNotVisible }];
+    const blink = [...times(0, 20), ...times(53, 60)];
+    const p = poses(60).filter((x) => x.t < at(20) || x.t >= at(50));
+    const v = viewIntervals(q, span, p, [], blink);
+    expect(secs(v.gone).map((g) => g.map(Math.round))).toEqual([[20, 50]]);
+  });
+  it('without face timing (no landmarks from this source) nothing changes', () => {
+    const q = [{ t: at(0), code: V.ok }];
+    const p = poses(60).filter((x) => x.t < at(30) || x.t >= at(34));
+    expect(viewIntervals(q, span, p).away).toEqual([]);
   });
 });
 

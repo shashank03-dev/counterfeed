@@ -143,9 +143,9 @@ await page.screenshot({ path: join(ART, 'report-full.png'), fullPage: true });
 const list = await page.evaluate(() => window.counterfeed.listReports());
 const report = (list.reports ?? list).sort((a, b) => b.endedAt - a.endedAt)[0];
 writeFileSync(join(ART, 'report.json'), JSON.stringify({ report, cues }, null, 2));
-const raw = await page.evaluate(() => ({ last: window.__counterfeedLast ?? null, landmarks: window.__counterfeedRawLandmarks ?? [] }));
+const raw = await page.evaluate(() => ({ last: window.__counterfeedLast ?? null, landmarks: window.__counterfeedRawLandmarks ?? [], eyes: window.__counterfeedRawEyes ?? [] }));
 // The raw session (local only, git-ignored): replayed by test/renderer/real-replay.test.ts to tune detectors.
-writeFileSync(join(ART, 'capture.json'), JSON.stringify({ plan: PLAN, watchStartWallMs: t0, cues, capture: raw.last?.capture ?? null, landmarks: raw.landmarks }));
+writeFileSync(join(ART, 'capture.json'), JSON.stringify({ plan: PLAN, watchStartWallMs: t0, cues, capture: raw.last?.capture ?? null, landmarks: raw.landmarks, eyes: raw.eyes }));
 log('raw capture saved:', raw.last ? 'yes' : 'NO', `${raw.landmarks.length} landmark sets`);
 const TOL = 4000;
 const rows = PLAN.filter((p) => p.kind && p.kind !== 'prep').map((p) => {

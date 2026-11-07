@@ -329,7 +329,7 @@ class Session {
     const plan = get().plan!;
 
     // Your normal, for the live cues (the report recomputes everything from scratch).
-    const view = viewIntervals(this.quality, this.settleSpan, this.samples.pose);
+    const view = viewIntervals(this.quality, this.settleSpan, this.samples.pose, [], this.samples.pose.length ? this.samples.blink.map((b) => b.t) : undefined);
     const blinks = blinkTimes(this.samples.blink);
     this.baseBlink = this.forced ? null : blinkRate(blinks, this.samples.blink, view.ok);
     const breathValid = subtract(view.breath, talkingIntervals(this.samples.talking));
@@ -432,7 +432,7 @@ class Session {
     }
     const span = { start: now - 25e6, end: now };
     const pose = this.recentPose(span.start);
-    const face = viewIntervals(this.quality, span, pose, this.poseFacing);
+    const face = this.liveView(span, pose);
     this.learnPose(pose, face.away, now);
     const lastAway = face.away[face.away.length - 1];
     if (lastAway && now - lastAway.end < 700_000) return { cue: { kind: 'face', text: 'Looking away' }, nudge: false };
@@ -474,7 +474,7 @@ class Session {
     const plan = get().plan;
     const span = { start: now - 25e6, end: now };
     const pose = this.recentPose(span.start);
-    const face = viewIntervals(this.quality, span, pose, this.poseFacing);
+    const face = this.liveView(span, pose);
     this.learnPose(pose, face.away, now);
     const state = q && q.code !== 0 ? faceStateOf(q.code) : 'ok';
     const lastAway = face.away[face.away.length - 1];
@@ -482,7 +482,9 @@ class Session {
       this.awayStart ??= lastAway?.start ?? now;
       const awayUs = now - this.awayStart;
       const secs = Math.round(awayUs / 1e6);
-      return { cue: { kind: 'face', text: q?.code === V.noFace ? `Away from the screen · ${secs} s` : `Looking away · ${secs} s` }, nudge: !!plan?.nudges && awayUs >= FOCUS.nudgeUs };
+      const gone = face.gone[face.gone.length - 1];
+      const left = q?.code === V.noFace || (!!gone && now - gone.end < 700_000);
+      return { cue: { kind: 'face', text: left ? `Away from the screen · ${secs} s` : `Looking away · ${secs} s` }, nudge: !!plan?.nudges && awayUs >= FOCUS.nudgeUs };
     }
     if (this.awayStart !== null) {
       if (now - this.awayStart >= FOCUS.breakUs) this.lastBreakEnd = now;
@@ -492,6 +494,15 @@ class Session {
     const hold = this.holdNow(now, face, span);
     if (hold !== null) return { cue: { kind: 'hold', text: `Breathing paused · ${Math.round((now - hold) / 1e6)} s` }, nudge: false };
     return { cue: { kind: 'focus', text: `Focused · ${mins((now - Math.max(this.lastBreakEnd, this.watchSpan.start)) / 1000)}` }, nudge: false };
+  }
+
+  /** Live view of the face, as the report will judge it. The live edge waits 0.5 s for the next packet. */
+  private liveView(span: { start: number; end: number }, pose: PoseSample[]) {
+    const b = this.samples.blink;
+    let i = b.length;
+    while (i > 0 && b[i - 1]!.t >= span.start) i--;
+    const faceTimes = this.samples.pose.length ? b.slice(i).map((d) => d.t) : undefined;
+    return viewIntervals(this.quality, span, pose, this.poseFacing, faceTimes, 500_000);
   }
 
   private recentPose(from: number): PoseSample[] {
